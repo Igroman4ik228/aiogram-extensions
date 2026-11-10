@@ -5,19 +5,26 @@
 Модульные расширения и утилиты для aiogram 3. В планах — ограничение частоты
 запросов, очереди сообщений, пагинация и инструменты наблюдаемости.
 
-**В разработке:** пока доступна только основа пакета. Запланированные возможности
-ещё не реализованы.
+**В разработке:** доступны конфигурации с валидацией, типы результатов, callbacks
+и Redis connection manager. Пагинация, алгоритмы limiter, middleware и workers
+очереди пока не реализованы.
 
 ## Начало работы
 
 Нужны Python 3.11–3.14 и [uv](https://docs.astral.sh/uv/). Поддерживаемый диапазон
-aiogram — `>=3.29.1,<3.32`. Redis и Taskiq не входят в зависимости.
+aiogram — `>=3.29.1,<3.32`. Базовая установка не включает Redis и Taskiq.
+Необязательный extra `redis` закрепляет redis-py 8.1.0; `messaging-redis` будет
+добавлен при упаковке рабочего транспорта. Пользователи могут устанавливать пакет
+через `pip install aiogram-extensions` или `pip install "aiogram-extensions[redis]"`;
+uv нужен только для приведённых ниже команд разработки.
 
 Из корня репозитория установите пакет и зависимости для разработки:
 
 ```console
 uv sync --locked
 ```
+
+Зависимости разработки включают redis-py для проверки необязательного API.
 
 ## Примеры
 
@@ -27,6 +34,8 @@ uv sync --locked
 ```console
 uv run --locked examples/package_info.py
 uv run --locked examples/bot_lifecycle.py
+uv run --locked examples/contracts.py
+uv run --locked examples/redis_lifecycle.py
 ```
 
 - [Информация о пакете](../examples/package_info.py): импорт пакета, проверка его
@@ -35,10 +44,171 @@ uv run --locked examples/bot_lifecycle.py
   aiogram с искусственным токеном, без запросов к Telegram API. Этот пример показывает
   работу зависимости aiogram, а не API расширений.
 
-Оба примера работают без учётных данных, доступа к Telegram и Redis. Примеры
-расширений будут добавляться вместе с их реализацией; запланированный API пока
-нельзя запустить. Примеры проходят линтер, проверку типов и
+- [Контракты и callbacks](../examples/contracts.py): конфигурации и явно
+  отправленное событие, без запуска limiter или очереди.
+- [Владение Redis](../examples/redis_lifecycle.py): создание/закрытие клиента
+  и построение ключа; нужен redis-py, но сервер Redis не требуется.
+
+Все четыре примера работают без учётных данных, сети и внешних сервисов.
+Примеры limiter и очереди появятся вместе с реализациями.
+Примеры проходят линтер, проверку типов и
 [тестирование в отдельных процессах](../tests/integration/test_examples.py).
+
+## Контракты этапа 2
+
+Типы и жизненный цикл Redis ниже реализованы. Описанное поведение limiter и очереди —
+контракт для этапов 4–6, а не текущая гарантия работы. Корень пакета не экспортирует
+функциональный API. Импортируйте из функциональных модулей:
+
+```python
+from aiogram_extensions.rate_limit import RateLimitConfig, RateLimitResult, RateRule
+from aiogram_extensions.messaging import EnqueueResult, QueueConfig, RetryConfig, TaskState
+from aiogram_extensions.integrations import EventDispatcher, TaskEvent
+from aiogram_extensions.redis import RedisConfig, RedisConnectionManager
+
+limits = RateLimitConfig(rules=(RateRule(name="incoming", limit=5, window=1),))
+queue = QueueConfig(workers=2, maxsize=100, retry=RetryConfig(max_attempts=3))
+```
+
+### Конфигурации и результаты
+
+Конфигурации — неизменяемые стандартные dataclasses с именованными аргументами.
+Невалидные настройки вызывают `ValueError`. Целочисленные счётчики не принимают
+bool и дробные числа. Время задаётся конечным положительным числом секунд, если
+не указано иное. Имена, prefix и namespace допускают латиницу, цифры, `_`, `.` и `-`.
+
+| Тип | Поля и значения по умолчанию |
+| --- | --- |
+| `RateRule` | Обязательные `name`, положительное целое `limit`, положительное `window`; `scope="user_chat"`, `algorithm="fixed_window"` (альтернатива: `sliding_window`). |
+| `RateLimitConfig` | Обязательный непустой tuple `rules` с уникальными именами; `on_limit="reject"` или `"wait"`. Неявных квот Telegram нет. |
+| `RateLimitResult` | Обязательный bool `allowed`; `retry_after=0`, `triggered_rules=()`. Отказ требует положительного ожидания и имён сработавших правил; разрешённый результат их не содержит. |
+| `RetryConfig` | `max_attempts=3`, включая первую попытку; `base_delay=1`, `max_delay=60` (не меньше base), `retry_unknown=False`. |
+| `QueueConfig` | `workers=1`, `maxsize=1000`, `overflow="wait"` или `"reject"`, `enqueue_timeout=None` (без дедлайна), `drain_timeout=30`, `max_payload_bytes=262144`, `idempotency_ttl=86400`, `terminal_ttl=86400`, `retry=RetryConfig()`. Счётчики положительные; вместимость всегда ограничена. |
+| `EnqueueResult` | Обязательные непустые `task_id`, `generation`; `duplicate=False`. Подтверждает приём, а не доставку. |
+| `RedisConfig` | `url="redis://localhost:6379/0"` (скрыт в repr), `prefix="aiogram_extensions"`, `connect_timeout=1`, `socket_timeout=1`, `max_connections=20`. Только `redis://`/`rediss://`, числовая база, без query/fragment в URL. |
+
+### Решения по limiter
+
+Ключи изолируют направление, имя правила, алгоритм и числовой bot ID (не токен).
+Процессы с общими именем правила/namespace используют одинаковые настройки;
+при изменении настроек меняйте имя правила или namespace. Дополнительные идентификаторы:
+
+| Scope | Идентичность и применимость |
+| --- | --- |
+| `user_chat` | User ID + chat ID. Incoming middleware пропускает события без любого из них. |
+| `bot` | Без дополнительного ID; общий бюджет для чатов и методов. |
+| `chat` | Chat ID для любого типа чата. |
+| `group` | Chat ID только при явно подтверждённом типе `group`/`supergroup`. Private/channel/неизвестный тип не подходят; одного отрицательного ID недостаточно. Бюджет отдельный для каждой Telegram-группы, а не общий для всех групп. |
+| `method` | Имя метода Bot API, общий бюджет между чатами. |
+| `custom` | Явный непустой ключ приложения. |
+
+Прямая проверка без необходимых user/chat/method/custom данных вызывает `ValueError`.
+Fixed Window начинается с первого принятого события: `[start, start + window)`;
+Sliding Window считает принятые события в `(now - window, now]`. Memory использует
+монотонные часы, Redis — серверный `TIME`; одно измерение на решение. Устаревшее
+состояние удаляется при обращении и ограниченной очистке; Redis также использует TTL.
+
+Все применимые правила проверяются и списываются атомарно. При отказе не списывается
+ни одно. `triggered_rules` следует порядку конфигурации; `retry_after` — максимальное
+ожидание среди блокирующих правил. Ошибка HTTP не возвращает уже списанную попытку.
+Reject возвращает отказ; wait асинхронно ждёт и проверяет заново, не резервируя
+вместимость во время сна. Отмена распространяется; уже принятые попытки учитываются.
+Ошибка backend вызывает `RateLimitBackendError` (наследник `RateLimitError`), без
+отправки и fallback. Outgoing middleware записывает cooldown из `TelegramRetryAfter`
+и повторно выбрасывает ошибку; HTTP retries принадлежат очереди или прямому вызывающему
+коду. Вложенного retry loop нет. Настройки не гарантируют соблюдение квот Telegram.
+
+### Решения по очереди
+
+`TaskState`: enqueued → started → completed; временная ошибка приводит к
+retry_scheduled → started. Исчерпание попыток/постоянная ошибка: failed → dlq;
+failed может сохраняться при повторении устойчивой записи в DLQ. Replay создаёт
+новое поколение enqueued со сброшенными попытками; старые доставки его не исполняют.
+
+Memory workers запускаются явно. Постановка до старта/после остановки вызывает
+`QueueNotRunningError`. `maxsize` ограничивает все принятые незавершённые задачи,
+включая активные и отложенные повторы; дубликат не занимает новое место. Reject
+вызывает `QueueFullError`; wait ждёт место до `enqueue_timeout`, затем вызывает
+ту же ошибку. Отмена до приёма не добавляет задачу. При неизвестном результате
+команды Redis проверяйте приём повторением того же idempotency key.
+
+Memory извлекает первые попытки в порядке приёма FIFO; Redis — готовые записи
+в порядке публикации stream, который может отличаться от порядка приёма журнала.
+Несколько workers/producers и retries не гарантируют порядок завершения или по чату.
+Stop закрывает приём и ждёт Memory до `drain_timeout`; затем отменяет и дожидается
+workers, переносит незавершённую работу в локальную DLQ и вызывает `DrainTimeoutError`.
+Это не отменяет эффект HTTP. Остановка Redis producer не дожидается удалённых workers;
+их lifecycle и отдельным pool управляет Taskiq, незавершённая устойчивая работа сохраняется.
+
+Планируемый Redis payload: UTF-8 JSON `{"version": 1, "method": "sendMessage", "params": {...}}`.
+Размер всего закодированного envelope ограничен `max_payload_bytes`; неконечные числа
+запрещены. Неизвестные версии/методы, некорректные, неподдерживаемые или слишком большие
+payload вызывают `SerializationError` до приёма. Обязательные методы: `sendMessage`,
+`sendPhoto`, `sendDocument`, `sendVideo`, `sendAudio`, `sendMediaGroup`, `sendLocation`,
+`sendContact`. Поддерживаются file ID, URL и общие пути; `FSInputFile` превращается
+в `{"$local_file": path, "filename": name}`. Путь должен быть доступен worker.
+Redis отклоняет buffered files, потоки и живые Bot/Message/Update/FSM; Memory может
+хранить локальные aiogram files. Worker создаёт Bot через factory и закрывает
+только принадлежащие ему сессии.
+
+В пределах backend/namespace равные idempotency key/payload возвращают сохранённые
+task/generation с `duplicate=True`; различающиеся payload вызывают
+`IdempotencyConflictError`. Активные идентичности не истекают. После терминального
+исхода `idempotency_ttl` хранит идентичность/fingerprint, независимо от `terminal_ttl`
+для результата/тела DLQ. Истёкшие тела недоступны и удаляются ограниченной очисткой
+worker или явно. Replay проверяет вместимость и атомарно заменяет запись DLQ новым
+поколением; повтор сохранённого replay возвращает его. Memory теряет всё состояние
+при завершении процесса. Redis следует [протоколу spike](redis-queue-spike.md).
+
+Каждая попытка резервируется до HTTP. Временные сетевые/серверные ошибки повторяются;
+постоянные идут в DLQ, неизвестные повторяются только по настройке. Стандартная
+экспоненциальная задержка ограничена `max_delay`; `TelegramRetryAfter.retry_after`
+остаётся минимумом даже выше этого предела. Своя политика ограничена `max_attempts`.
+DLQ хранит task/generation, payload, категорию причины и число попыток для публичного
+просмотра/replay. Retries/ACK принадлежат одному слою. `QueueBackendError` допускает
+неизвестный результат приёма/доставки; все ошибки очереди наследуют `QueueError`.
+Неизвестный исход HTTP может дублировать эффект в Telegram; exactly-once не обещается.
+
+### Жизненный цикл Redis и события
+
+`RedisConnectionManager(config=None, *, client=None)` заимствует клиент или создаёт
+его лениво. Используйте `async with manager` либо `await manager.start()` и
+`await manager.aclose()`. Start идемпотентен, не выполняет сетевой I/O и health check;
+команды `manager.client` подключаются и передают ошибки redis-py. Собственный клиент
+использует декодированные ответы, заданные таймауты/размер pool и ноль автоматических
+повторов команд. Настройки заимствованного клиента не меняются. Prefix управляет
+ключами в обоих случаях; параметры соединения — только собственным клиентом.
+Taskiq сохраняет отдельный pool.
+
+Доступ до старта/после закрытия и повторный старт после закрытия вызывают
+`RedisLifecycleError`. Close идемпотентен, включая конкурентные вызовы; неудачное
+закрытие можно повторить. Заимствованные ресурсы не закрываются. Делитесь manager
+внутри одного lifecycle; вложенные контексты не поддерживаются. `key(namespace,
+*parts)` кодирует отдельные непустые строковые части percent-encoding без коллизий
+разделителя. Импорты/конфигурации/ключи не требуют extra; создание собственного клиента
+без него вызывает `MissingRedisExtraError` с `pip install "aiogram-extensions[redis]"`.
+Импорт не открывает соединений. См.
+[официальный API lifecycle redis-py](https://redis.readthedocs.io/en/stable/examples/asyncio_examples.html).
+
+Неизменяемые события из `aiogram_extensions.integrations`:
+
+| Событие | Поля |
+| --- | --- |
+| `TaskEvent` | Обязательные `kind` (`task_enqueued`, `task_started`, `task_completed`, `task_failed`, `retry_scheduled`, `task_dlq`, `dlq_replayed`), `task_id`, `generation`; `attempt=0`, `retry_after=0`. |
+| `LimitExceededEvent` | Обязательные `direction` (`incoming`/`outgoing`), tuple `triggered_rules`, `retry_after`. |
+| `BackendErrorEvent` | Обязательные `component` (`redis`/`rate_limit`/`messaging`), `operation` (`connect`/`check`/`enqueue`/`process`/`close`). |
+
+`Event` — объединение типов; `EventCallback` — асинхронная функция, принимающая его
+и возвращающая `None`. `EventDispatcher(callbacks=())` фиксирует набор callbacks;
+`await emit(event)` ждёт их в порядке регистрации. Обычные исключения дают постоянное
+предупреждение в `aiogram_extensions.integrations.events`; остальные callbacks работают.
+Тексты исключений/tracebacks, ID, учётные данные и payload не логируются; root logging
+не меняется. Отмена и другие наследники `BaseException` распространяются. Медленный
+callback задерживает вызывающего; приложение может задать таймаут внутри callback.
+Будущие компоненты отправляют события после фиксации переходов; ошибка callback их
+не откатывает. Отмена после фиксации может скрыть результат — повторяйте с идемпотентностью.
+События — локальные наблюдения, не устойчивый журнал аудита. Пока приложение отправляет
+их явно; автоматические события появятся вместе с реализациями компонентов.
 
 ## Разработка
 
@@ -101,12 +271,17 @@ uv run --directory spikes/redis_queue --locked pyright
 | Integration — интеграционные | Совместная работа компонентов: адаптеры aiogram, хранилища, установка пакета и примеры в отдельных процессах. | `tests/integration/`, при необходимости — подпапки модулей |
 | End-to-end (E2E) — сквозные | Полный поддерживаемый сценарий, например producer → Redis → worker → локальная подмена Telegram API. | `tests/e2e/<feature>/` |
 
-В основном наборе пакета пока только интеграционные тесты. Папки unit и E2E
-создавайте вместе с первыми тестами, без пустых заготовок. Текущая структура:
+Основной набор пакета содержит модульные и интеграционные тесты. Папки E2E
+создавайте вместе с первыми тестами. Текущая структура:
 
 ```text
 tests/
 ├── conftest.py
+├── unit/
+│   ├── integrations/test_events.py
+│   ├── messaging/test_contracts.py
+│   ├── rate_limit/test_contracts.py
+│   └── test_redis.py
 └── integration/
     ├── test_examples.py
     ├── test_imports.py
@@ -160,8 +335,9 @@ uv run --locked pytest --collect-only -q
 
 ### Планируемое покрытие функциональности
 
-Следующие проверки будут добавляться вместе с реализацией модулей из
-[технического задания](TZ.md); сами модули пока не реализованы.
+Следующие проверки поведения будут добавляться вместе с реализациями из
+[технического задания](TZ.md). Этап 2 уже проверяет конфигурации, результаты,
+callbacks, владение Redis, независимые импорты и отсутствие extras.
 
 | Область | Что проверять |
 | --- | --- |

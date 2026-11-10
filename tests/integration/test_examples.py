@@ -20,6 +20,24 @@ import pytest
             ("Session open: True", "Session closed: True"),
             id="bot-lifecycle",
         ),
+        pytest.param(
+            "contracts.py",
+            (
+                "Incoming rule: user_chat/fixed_window",
+                "Queue capacity: 1000",
+                "Event: task_enqueued",
+            ),
+            id="contracts",
+        ),
+        pytest.param(
+            "redis_lifecycle.py",
+            (
+                "Owned client: True",
+                "Key: example:rate_limit:incoming:123:456",
+                "Manager closed: True",
+            ),
+            id="redis-lifecycle",
+        ),
     ],
 )
 def test_example_runs_offline(

@@ -43,6 +43,10 @@ def test_installed_wheel_metadata_and_typing_marker(project_root: Path, tmp_path
                 from pathlib import Path
 
                 import aiogram_extensions
+                from aiogram_extensions.rate_limit import RateRule
+                from aiogram_extensions.messaging import QueueConfig
+                from aiogram_extensions.integrations import TaskEvent
+                from aiogram_extensions.redis import RedisConnectionManager, MissingRedisExtraError
 
                 package_file = aiogram_extensions.__file__
                 assert package_file is not None
@@ -50,6 +54,29 @@ def test_installed_wheel_metadata_and_typing_marker(project_root: Path, tmp_path
                 package = distribution("aiogram-extensions")
                 assert package.metadata["License-Expression"] == "MIT"
                 assert files("aiogram_extensions").joinpath("py.typed").is_file()
+                assert package.metadata.get_all("Provides-Extra") == ["redis"]
+                requirements = package.metadata.get_all("Requires-Dist") or []
+                assert any(
+                    'redis==8.1.0' in item and 'extra == "redis"' in item.replace("'", '"')
+                    for item in requirements
+                )
+                assert not any(item.startswith(("taskiq", "taskiq-redis")) for item in requirements)
+                assert RateRule(name="incoming", limit=5, window=1).scope == "user_chat"
+                assert QueueConfig().workers == 1
+                assert TaskEvent(kind="task_enqueued", task_id="1", generation="1").attempt == 0
+                assert "redis" not in sys.modules
+
+                import asyncio
+
+                async def check_missing_extra():
+                    try:
+                        await RedisConnectionManager().start()
+                    except MissingRedisExtraError as error:
+                        assert 'pip install "aiogram-extensions[redis]"' in str(error)
+                    else:
+                        raise AssertionError("The clean environment unexpectedly has Redis")
+
+                asyncio.run(check_missing_extra())
                 """
             ),
         ]
