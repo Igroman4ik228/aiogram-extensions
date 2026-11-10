@@ -1,0 +1,33 @@
+--- a/taskiq_redis/redis_broker.py
++++ b/taskiq_redis/redis_broker.py
+@@ -271,6 +271,7 @@
+     async def listen(self) -> AsyncGenerator[AckableMessage, None]:
+         """Listen to incoming messages."""
+         async with Redis(connection_pool=self.connection_pool) as redis_conn:
++            reclaim_cursors: dict[str, str | bytes] = {}
+             while True:
+                 logger.debug("Starting fetching new messages")
+                 fetched = await redis_conn.xreadgroup(
+@@ -284,8 +285,6 @@
+                     noack=False,
+                     count=self.count,
+                 )
+-                if not fetched:
+-                    continue
+                 for stream, msg_list in fetched:  # type: ignore[str-unpack]
+                     for msg_id, msg in msg_list:  # type: ignore[str-unpack,union-attr]
+                         logger.debug("Received message: %s", msg)
+@@ -306,11 +305,13 @@
+                         groupname=self.consumer_group_name,
+                         consumername=self.consumer_name,
+                         min_idle_time=self.idle_timeout,
++                        start_id=reclaim_cursors.get(stream, "0-0"),
+                         count=self.unacknowledged_batch_size,
+                     )
+                     await lock.release()
+                     results = await pipe.execute()
+                     pending = results[1]
++                    reclaim_cursors[stream] = pending[0]
+ 
+                     logger.debug(
+                         "Found %d pending messages in stream %s",

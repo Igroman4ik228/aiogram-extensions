@@ -94,6 +94,14 @@ max-positional-args = 7
     "INP001", # Examples are standalone scripts, not an importable package.
     "T201",   # Console output is part of the examples.
 ]
+"spikes/redis_queue/*.py" = [
+    "INP001", # Isolated spike entrypoints are standalone modules, not a package.
+]
+"spikes/redis_queue/tests/**/*.py" = [
+    "S101",    # Match the main test suite's assertion conventions.
+    "PLR2004", # Literal expected results and test timing parameters.
+    "INP001",  # Match the main test suite's directory conventions.
+]
 
 [tool.pyright]
 pythonVersion = "3.11"

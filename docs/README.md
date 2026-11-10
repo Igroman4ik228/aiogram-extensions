@@ -52,6 +52,30 @@ uv run --locked pytest
 
 Build a wheel and source distribution with `uv build`.
 
+### Redis queue technical spike
+
+Stage 1 has an isolated stack: an immutable patched transport wheel and a durable
+application journal for attempts, ownership, enqueue outbox, DLQ and replay.
+Base dependencies are unchanged. See the [report and guarantee boundaries](redis-queue-spike.md)
+and [primary-source findings](spike-durability-sources.md).
+
+With Docker's Linux engine running, execute from the repository root:
+
+```console
+uv sync --directory spikes/redis_queue --locked
+uv run --directory spikes/redis_queue --locked python build_transport.py --download
+uv sync --directory spikes/redis_queue/verified --locked
+uv run --directory spikes/redis_queue/verified --locked pytest -c ../pyproject.toml ../tests --run-redis --durable --transport-wheel -q
+uv run --directory spikes/redis_queue --locked pyright
+```
+
+Tests manage disposable Redis with AOF and a local HTTP API; no bot credentials
+are needed. They include worker/Redis crashes and backend outages. Without
+`--run-redis`, service tests skip explicitly. The verified environment installs
+the pinned local wheel without runtime patching. These remain experimental tools
+for later library implementation. Telegram delivery can still duplicate after
+an unknown external outcome; exactly-once is not promised.
+
 ### TDD and test conventions
 
 Tests automatically check expected behavior and catch regressions. Examples show
@@ -73,8 +97,8 @@ Group tests first by level, then by feature as the suite grows:
 | Integration | Components working together: aiogram adapters, storage, package installation and example subprocesses. | `tests/integration/`, then feature subdirectories as needed |
 | End-to-end (E2E) | A complete supported workflow, such as producer → Redis → worker → a local Telegram API stand-in. | `tests/e2e/<feature>/` |
 
-Only integration tests exist today. Create unit and E2E directories with their first
-tests, rather than empty placeholders. Current layout:
+The main package suite contains integration tests. Create unit and E2E directories
+with their first tests, rather than empty placeholders. Current layout:
 
 ```text
 tests/

@@ -1,0 +1,23 @@
+[project]
+name = "aiogram-extensions-verified-redis-spike"
+version = "0.0.0"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "aiogram==3.31.0",
+    "redis==8.1.0",
+    "taskiq==0.13.0",
+    "taskiq-redis==1.2.4+aiogramext.2",
+]
+
+[dependency-groups]
+dev = [
+    "pyright==1.1.414",
+    "pytest==9.2.0",
+    "pytest-asyncio==1.4.1.post1",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+taskiq-redis = { path = "../artifacts/taskiq_redis-1.2.4+aiogramext.2-py3-none-any.whl" }
