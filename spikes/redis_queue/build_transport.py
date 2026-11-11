@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent
 def build(upstream: bytes) -> bytes:
     if hashlib.sha256(upstream).hexdigest() != UPSTREAM_SHA256:
         raise ValueError(UPSTREAM_SHA256)
+
     old_info = "taskiq_redis-1.2.4.dist-info"
     new_info = f"taskiq_redis-{VERSION}.dist-info"
     with zipfile.ZipFile(io.BytesIO(upstream)) as archive:
@@ -34,7 +35,9 @@ def build(upstream: bytes) -> bytes:
             for name in archive.namelist()
             if not name.endswith(("/", "/RECORD"))
         }
+
     files["taskiq_redis/redis_broker.py"] = patched_source(files["taskiq_redis/redis_broker.py"])
+
     metadata = files[f"{new_info}/METADATA"]
     files[f"{new_info}/METADATA"] = metadata.replace(
         b"Version: 1.2.4\n",
@@ -45,6 +48,7 @@ def build(upstream: bytes) -> bytes:
         b"Wheel-Version: 1.0\nGenerator: aiogram-extensions-spike\n"
         b"Root-Is-Purelib: true\nTag: py3-none-any\n"
     )
+
     patch = (ROOT / "recovery.patch").read_text(encoding="utf-8").encode()
     files[f"{new_info}/recovery.patch"] = patch
     files[f"{new_info}/provenance.json"] = (
@@ -61,6 +65,7 @@ def build(upstream: bytes) -> bytes:
         )
         + "\n"
     ).encode()
+
     record = io.StringIO(newline="")
     writer = csv.writer(record, lineterminator="\n")
     for name, data in sorted(files.items()):
@@ -68,6 +73,7 @@ def build(upstream: bytes) -> bytes:
         writer.writerow([name, "sha256=" + digest, len(data)])
     writer.writerow([f"{new_info}/RECORD", "", ""])
     files[f"{new_info}/RECORD"] = record.getvalue().encode()
+
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_STORED) as archive:
         for name, data in sorted(files.items()):
@@ -75,6 +81,7 @@ def build(upstream: bytes) -> bytes:
             info.create_system = 3
             info.external_attr = 0o100644 << 16
             archive.writestr(info, data)
+
     return output.getvalue()
 
 
@@ -83,6 +90,7 @@ def main() -> None:
     parser.add_argument(
         "--download", action="store_true", help="Fetch pinned upstream if not cached"
     )
+
     args = parser.parse_args()
     cache = ROOT / ".venv/upstream-taskiq-redis.whl"
     if args.download and not cache.exists():
@@ -90,13 +98,17 @@ def main() -> None:
             original = response.read()
         if hashlib.sha256(original).hexdigest() != UPSTREAM_SHA256:
             raise ValueError(UPSTREAM_SHA256)
+
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_bytes(original)
+
     artifact = build(cache.read_bytes())
     digest = hashlib.sha256(artifact).hexdigest()
+
     folder = ROOT / "artifacts"
     folder.mkdir(exist_ok=True)
     manifest = (json.dumps({"filename": FILENAME, "sha256": digest}, indent=2) + "\n").encode()
+
     for path, data in (
         (folder / FILENAME, artifact),
         (folder / f"transport-{VERSION}.json", manifest),
@@ -107,6 +119,7 @@ def main() -> None:
         else:
             with path.open("xb") as target:
                 target.write(data)
+
     print(f"{FILENAME}: sha256:{digest}")  # noqa: T201 -- Artifact verification output.
 
 

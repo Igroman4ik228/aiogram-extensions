@@ -53,14 +53,17 @@ def transport_wheel(request: pytest.FixtureRequest) -> None:
 def redis_server(request: pytest.FixtureRequest) -> Iterator[RedisService]:
     if not request.config.getoption("--run-redis"):
         pytest.skip("Redis spike requires explicit --run-redis and Docker")
+
     docker = shutil.which("docker")
     assert docker is not None, "Docker is required for --run-redis"
+
     name = f"aiogram-extensions-spike-{uuid.uuid4().hex}"
 
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     service = RedisService(docker, name, f"redis://127.0.0.1:{port}/0")
+
     service.run(
         "run",
         "--detach",
@@ -79,6 +82,7 @@ def redis_server(request: pytest.FixtureRequest) -> Iterator[RedisService]:
         "--maxmemory-policy",
         "noeviction",
     )
+
     try:
         service.wait()
         yield service

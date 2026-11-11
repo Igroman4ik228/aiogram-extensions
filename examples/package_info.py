@@ -9,6 +9,7 @@ import aiogram_extensions
 def main() -> None:
     package = metadata("aiogram-extensions")
     marker = files(aiogram_extensions).joinpath("py.typed")
+
     print(f"Package: {package['Name']}")
     print(f"License: {package['License-Expression']}")
     print(f"Typing marker: {'present' if marker.is_file() else 'missing'}")

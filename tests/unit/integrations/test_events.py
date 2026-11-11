@@ -64,6 +64,7 @@ async def test_callback_failure_is_logged_safely_and_remaining_callbacks_run(
     await EventDispatcher((broken, observe)).emit(event)
 
     assert seen == [event]
+
     assert "callback failed" in caplog.text
     assert "secret-token" not in caplog.text
     assert "private-id" not in caplog.text

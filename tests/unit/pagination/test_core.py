@@ -69,8 +69,10 @@ async def test_cursor_pages_keep_opaque_bidirectional_tokens() -> None:
     class Source:
         async def fetch(self, *, cursor: str | None, limit: int) -> CursorResult[str]:
             calls.append((cursor, limit))
+
             if cursor is None or cursor == "start":
                 return CursorResult(items=("a", "b"), next_cursor="opaque/after:b?雪")
+
             return CursorResult(items=("c",), previous_cursor="start")
 
     paginator = CursorPaginator(Source(), page_size=2)
@@ -84,6 +86,7 @@ async def test_cursor_pages_keep_opaque_bidirectional_tokens() -> None:
     assert last.cursor == "opaque/after:b?雪"
     assert last.limit == 2
     assert first.previous_cursor is last.next_cursor is None
+
     assert calls == [(None, 2), ("opaque/after:b?雪", 2), ("start", 2)]
 
 
@@ -108,6 +111,7 @@ async def test_first_and_last_pages_have_only_one_neighbor() -> None:
     assert first.items == ("first",)
     assert first.previous_page is None
     assert first.next_page == 2
+
     assert last.items == ("last",)
     assert last.previous_page == 1
     assert last.next_page is None

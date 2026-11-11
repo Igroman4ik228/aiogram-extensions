@@ -72,6 +72,7 @@ def _current_label(
         text = template.format(page=page, pages=pages, total=total, count=count)
     except (KeyError, ValueError, IndexError, AttributeError, TypeError) as error:
         raise PaginationError("current_text", "has an invalid format") from error
+
     nonempty_string("current_text result", text)
     return text
 
@@ -92,13 +93,16 @@ class NavigationConfig:
         identifier("prefix", self.prefix)
         if len(self.prefix) > _MAX_PREFIX_LENGTH:
             raise PaginationError("prefix", "must contain at most 32 ASCII characters")
+
         seconds("ttl", self.ttl)
+
         positive_integer("max_entries", self.max_entries)
         if self.max_entries < _BUTTON_COUNT:
             raise PaginationError("max_entries", "must be at least 3")
 
         for name in ("previous_text", "next_text", "current_text", "stale_text", "invalid_text"):
             nonempty_string(name, getattr(self, name))
+
         _current_label(self.current_text, page=1, pages=1, total=1, count=1)
 
         require_instance("layout", self.layout, tuple)
@@ -106,6 +110,7 @@ class NavigationConfig:
             require_instance("layout row", row, tuple)
             if not row:
                 raise PaginationError("layout", "must have non-empty rows")
+
         buttons = [button for row in self.layout for button in row]
         if len(buttons) != _BUTTON_COUNT or any(
             buttons.count(action) != 1 for action in ("previous", "current", "next")
@@ -129,8 +134,9 @@ class Navigation(Generic[T]):
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._paginator = paginator
-        self.config = config if config is not None else NavigationConfig()
+        self.config: NavigationConfig = config if config is not None else NavigationConfig()
         require_instance("config", self.config, NavigationConfig)
+
         self._clock = clock
         self._targets: OrderedDict[str, _Target] = OrderedDict()
 
@@ -139,6 +145,7 @@ class Navigation(Generic[T]):
             first = next(iter(self._targets.values()))
             if first.expires_at > now:
                 break
+
             self._targets.popitem(last=False)
 
     def clear(self, *, scope: str | None = None) -> None:
@@ -152,8 +159,10 @@ class Navigation(Generic[T]):
 
     def keyboard(self, page: Page[T] | CursorPage[T], *, scope: str) -> InlineKeyboardMarkup:
         nonempty_string("scope", scope)
+
         markup, requests = self._build_keyboard(page)
         self._publish_targets(requests, scope=scope)
+
         return markup
 
     def _build_keyboard(
@@ -179,14 +188,17 @@ class Navigation(Generic[T]):
 
         requests: dict[str, int | str | None] = {}
         buttons: dict[Button, InlineKeyboardButton] = {}
+
         actions: tuple[tuple[Button, str, int | str | None], ...] = (
             ("previous", self.config.previous_text, previous),
             ("current", label, None),
             ("next", self.config.next_text, following),
         )
+
         for action, text, request in actions:
             if request is None and action != "current":
                 continue
+
             token = self.config.prefix + ":" + secrets.token_hex(12)
             requests[token] = request
             buttons[action] = InlineKeyboardButton(text=text, callback_data=token)
@@ -194,6 +206,7 @@ class Navigation(Generic[T]):
         rows = [
             [buttons[action] for action in row if action in buttons] for row in self.config.layout
         ]
+
         return InlineKeyboardMarkup(inline_keyboard=[row for row in rows if row]), requests
 
     def _publish_targets(self, requests: dict[str, int | str | None], *, scope: str) -> None:
@@ -212,31 +225,38 @@ class Navigation(Generic[T]):
         nonempty_string("scope", scope)
         if data is None or not re.fullmatch(re.escape(self.config.prefix) + r":[0-9a-f]{24}", data):
             raise InvalidNavigationError
+
         now = self._clock()
         self._remove_expired(now)
+
         target = self._targets.get(data)
         if target is None or target.scope != scope or target.expires_at <= now:
             raise StaleNavigationError
+
         request = target.request
         if request is None:
             return None
 
         paginator = self._paginator
         page: Page[T] | CursorPage[T]
+
         try:
             if isinstance(paginator, Paginator):
                 if not isinstance(request, int):
                     raise InvalidNavigationError
+
                 page = await paginator.page(request)
             else:
                 if not isinstance(request, str):
                     raise InvalidNavigationError
+
                 page = await paginator.page(request)
         except (PageOutOfRangeError, InvalidCursorError) as error:
             raise StaleNavigationError from error
 
         if self._targets.get(data) is not target or target.expires_at <= self._clock():
             raise StaleNavigationError
+
         return page
 
     def matches(self, query: CallbackQuery) -> bool:
@@ -259,6 +279,7 @@ class Navigation(Generic[T]):
         page = await self._answer(query, scope=scope)
         if page is not None:
             await render(query, page, self.keyboard(page, scope=scope))
+
         return True
 
     async def _answer(self, query: CallbackQuery, *, scope: str) -> Page[T] | CursorPage[T] | None:
@@ -271,6 +292,7 @@ class Navigation(Generic[T]):
         else:
             await query.answer()
             return page
+
         return None
 
 
@@ -288,7 +310,7 @@ class TextPagination(Navigation[T]):
         self._render = render
         self._locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
 
-        self.router = Router(name=self.config.prefix)
+        self.router: Router = Router(name=self.config.prefix)
         self.router.callback_query.register(self._navigate, self.matches)
         self.router.shutdown.register(self._shutdown)
 
@@ -312,8 +334,11 @@ class TextPagination(Navigation[T]):
         page = await self._paginator.page()
         text, entities = self._content(page)
         markup, requests = self._build_keyboard(page)
+
         sent = await message.answer(text, entities=entities, parse_mode=None, reply_markup=markup)
+
         self._publish_targets(requests, scope=self._scope(bot, sent, user.id))
+
         return sent
 
     async def _navigate(self, query: CallbackQuery, bot: Bot) -> None:
@@ -324,6 +349,7 @@ class TextPagination(Navigation[T]):
 
         scope = self._scope(bot, message, query.from_user.id)
         lock = self._locks.setdefault(scope, asyncio.Lock())
+
         async with lock:
             page = await self._answer(query, scope=scope)
             if page is None:
@@ -331,6 +357,7 @@ class TextPagination(Navigation[T]):
 
             text, entities = self._content(page)
             markup, requests = self._build_keyboard(page)
+
             await message.edit_text(text, entities=entities, parse_mode=None, reply_markup=markup)
             # Keep the previous buttons usable if Telegram rejects the edit.
             self._publish_targets(requests, scope=scope)

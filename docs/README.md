@@ -301,7 +301,9 @@ whose outcome can be unknown after a timeout.
 [Redis Lua scripting](https://redis.io/docs/latest/develop/programmability/eval-intro/)
 
 Check/charge all applicable rules atomically. On rejection, charge none.
-`triggered_rules` follows configuration order; `retry_after` is the maximum wait
+The Redis backend makes one request per decision, running the check and charge
+inside one Lua script. `triggered_rules` follows configuration order;
+`retry_after` is the maximum wait
 among blocking rules. HTTP failure does not refund an admitted attempt. Reject
 returns denial; wait asynchronously sleeps and rechecks, without reserving capacity
 while asleep. Cancellation propagates; already admitted attempts remain counted.

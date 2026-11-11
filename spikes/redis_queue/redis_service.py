@@ -40,6 +40,7 @@ class RedisService:
                 except (RedisConnectionError, RedisTimeoutError):
                     if time.monotonic() >= deadline:
                         raise
+
                 time.sleep(0.05)
 
     def crash_restart(self) -> None:

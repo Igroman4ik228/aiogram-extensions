@@ -29,6 +29,7 @@ async def test_reclaim_scans_past_recently_active_prefix(
         unacknowledged_batch_size=1,
         unacknowledged_lock_timeout=1,
     )
+
     await broker.startup()
 
     reader = broker.listen()
@@ -47,6 +48,7 @@ async def test_reclaim_scans_past_recently_active_prefix(
                 await asyncio.sleep(0.02)
 
         refresh = asyncio.create_task(keep_heads_recent())
+
         async with asyncio.timeout(2):
             message = await anext(reader)
 
@@ -60,5 +62,6 @@ async def test_reclaim_scans_past_recently_active_prefix(
             refresh.cancel()
             with suppress(asyncio.CancelledError):
                 await refresh
+
         await reader.aclose()
         await broker.shutdown()

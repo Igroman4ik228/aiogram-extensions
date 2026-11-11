@@ -15,13 +15,17 @@ from aiogram_extensions.pagination import aiogram as ui
 async def test_navigation_keyboard_resolves_the_next_page() -> None:
     paginator = Paginator(["a", "b", "c"], page_size=2)
     navigation = ui.Navigation(paginator)
+
     markup = navigation.keyboard(await paginator.page(), scope="chat:10/message:20/user:30")
 
     assert [[button.text for button in row] for row in markup.inline_keyboard] == [["1", "→"]]
+
     data = markup.inline_keyboard[0][-1].callback_data
     assert data is not None
     assert len(data.encode()) <= 64
+
     page = await navigation.resolve(data, scope="chat:10/message:20/user:30")
+
     assert page is not None
     assert page.items == ("c",)
 
@@ -31,10 +35,13 @@ async def test_navigation_expires_and_rejects_wrong_scope() -> None:
     paginator = Paginator([1, 2], page_size=1)
     navigation = ui.Navigation(paginator, clock=lambda: now[0])
     markup = navigation.keyboard(await paginator.page(), scope="owner")
+
     data = markup.inline_keyboard[0][-1].callback_data
     assert data is not None
+
     with pytest.raises(ValueError, match="stale"):
         await navigation.resolve(data, scope="other")
+
     now[0] = 400
     with pytest.raises(ValueError, match="stale"):
         await navigation.resolve(data, scope="owner")
@@ -58,17 +65,22 @@ async def test_cursor_navigation_uses_short_references_and_custom_layout() -> No
         layout=(("current",), ("previous", "next")),
     )
     navigation = ui.Navigation(paginator, config=config)
+
     markup = navigation.keyboard(await paginator.page(), scope="catalog")
+
     assert [[button.text for button in row] for row in markup.inline_keyboard] == [
         ["1 шт."],
         ["Далее"],
     ]
+
     data = markup.inline_keyboard[1][0].callback_data
     assert data is not None
     assert data.startswith("catalog:")
     assert len(data.encode()) <= 64
     assert cursor_value not in data
+
     page = await navigation.resolve(data, scope="catalog")
+
     assert page is not None
     assert page.items == ("last",)
 
@@ -76,6 +88,7 @@ async def test_cursor_navigation_uses_short_references_and_custom_layout() -> No
 async def test_embedded_handler_answers_and_renders_next_page() -> None:
     paginator = Paginator(["a", "b"], page_size=1)
     navigation = ui.Navigation(paginator)
+
     markup = navigation.keyboard(await paginator.page(), scope="owner")
     data = markup.inline_keyboard[0][-1].callback_data
     query = CallbackQuery(
@@ -84,15 +97,18 @@ async def test_embedded_handler_answers_and_renders_next_page() -> None:
         chat_instance="chat",
         data=data,
     )
+
     bot = Bot("123456:synthetic")
     transport = AsyncMock(return_value=True)
     bot.session.make_request = transport
     render = AsyncMock()
+
     async with bot:
         assert navigation.matches(query)
         assert await navigation.handle(query.as_(bot), scope="owner", render=render)
     transport.assert_awaited_once()
     assert transport.call_args.args[1].__api_method__ == "answerCallbackQuery"
+
     render.assert_awaited_once()
     assert render.call_args.args[1].items == ("b",)
 
@@ -100,6 +116,7 @@ async def test_embedded_handler_answers_and_renders_next_page() -> None:
 @pytest.mark.parametrize("data", [None, "", "other:abc", "aep1:bad", "aep1:" + "a" * 65, "雪" * 64])
 async def test_invalid_callback_data_is_rejected(data: str | None) -> None:
     navigation = ui.Navigation(Paginator([1]))
+
     with pytest.raises(ui.InvalidNavigationError):
         await navigation.resolve(data, scope="owner")
 
@@ -107,27 +124,38 @@ async def test_invalid_callback_data_is_rejected(data: str | None) -> None:
 async def test_unknown_reference_and_capacity_eviction_are_stale() -> None:
     paginator = Paginator([1, 2, 3], page_size=1)
     navigation = ui.Navigation(paginator, config=ui.NavigationConfig(max_entries=3))
+
     first = navigation.keyboard(await paginator.page(2), scope="old-owner")
     old = first.inline_keyboard[0][0].callback_data
+
     second = navigation.keyboard(await paginator.page(2), scope="owner")
     current = second.inline_keyboard[0][1].callback_data
+
     with pytest.raises(ui.StaleNavigationError):
         await navigation.resolve(old, scope="old-owner")
+
     with pytest.raises(ui.StaleNavigationError):
         await navigation.resolve("aep1:" + "0" * 24, scope="owner")
+
     assert await navigation.resolve(current, scope="owner") is None
 
 
 async def test_clear_invalidates_only_the_requested_scope() -> None:
     paginator = Paginator([1])
     navigation = ui.Navigation(paginator)
+
     first = navigation.keyboard(await paginator.page(), scope="one")
     second = navigation.keyboard(await paginator.page(), scope="two")
+
     navigation.clear(scope="one")
+
     with pytest.raises(ui.StaleNavigationError):
         await navigation.resolve(first.inline_keyboard[0][0].callback_data, scope="one")
+
     assert await navigation.resolve(second.inline_keyboard[0][0].callback_data, scope="two") is None
+
     navigation.clear()
+
     with pytest.raises(ui.StaleNavigationError):
         await navigation.resolve(second.inline_keyboard[0][0].callback_data, scope="two")
 
@@ -141,8 +169,11 @@ async def test_deleted_page_is_reported_as_stale() -> None:
 
     paginator = Paginator(Source(), page_size=1)
     navigation = ui.Navigation(paginator)
+
     markup = navigation.keyboard(await paginator.page(), scope="owner")
+
     items.clear()
+
     with pytest.raises(ui.StaleNavigationError):
         await navigation.resolve(markup.inline_keyboard[0][-1].callback_data, scope="owner")
 
@@ -179,8 +210,11 @@ def test_invalid_navigation_configuration_is_rejected(
 async def test_new_keyboard_invalidates_superseded_navigation_for_the_same_scope() -> None:
     paginator = Paginator([1, 2], page_size=1)
     navigation = ui.Navigation(paginator)
+
     first = navigation.keyboard(await paginator.page(), scope="owner")
+
     navigation.keyboard(await paginator.page(2), scope="owner")
+
     with pytest.raises(ui.StaleNavigationError):
         await navigation.resolve(first.inline_keyboard[0][-1].callback_data, scope="owner")
 
@@ -200,8 +234,10 @@ async def test_navigation_rechecks_reference_after_source_read(invalidate: str) 
 
     paginator = Paginator(Source(), page_size=1)
     navigation = ui.Navigation(paginator, clock=lambda: now)
+
     markup = navigation.keyboard(await paginator.page(), scope="owner")
     data = markup.inline_keyboard[0][-1].callback_data
+
     async with asyncio.timeout(5):
         task = asyncio.create_task(navigation.resolve(data, scope="owner"))
         try:
@@ -212,6 +248,7 @@ async def test_navigation_rechecks_reference_after_source_read(invalidate: str) 
                 now += 300
         finally:
             resume.set()
+
         with pytest.raises(ui.StaleNavigationError):
             await task
 
@@ -235,6 +272,7 @@ async def test_handler_answers_without_rendering(data: str | None, reply: str | 
     query = CallbackQuery(
         id="q", from_user=User(id=1, is_bot=False, first_name="A"), chat_instance="c", data=data
     )
+
     bot = Bot("123456:synthetic")
     transport = AsyncMock(return_value=True)
     bot.session.make_request = transport

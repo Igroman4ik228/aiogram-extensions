@@ -20,6 +20,7 @@ class DeliveryJournal:
     def __init__(self, client: Redis, prefix: str, *, retention_ms: int = 86400000) -> None:
         if type(retention_ms) is not int or not 0 < retention_ms <= MAX_RETENTION_MS:
             raise ValueError(retention_ms)
+
         self.client = client
         self.prefix = prefix
         self.retention_ms = retention_ms
@@ -29,6 +30,7 @@ class DeliveryJournal:
         serialized = json.dumps(wire, sort_keys=True, separators=(",", ":"), allow_nan=False)
         if len(serialized.encode()) > MAX_PAYLOAD_BYTES:
             raise ValueError(MAX_PAYLOAD_BYTES)
+
         result = await self._eval("enqueue", job, uuid.uuid4().hex, wire=serialized)
         return bool(result[0]), str(result[1])
 
@@ -97,6 +99,7 @@ class DeliveryJournal:
     def key(self, job: str) -> str:
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", job):
             raise ValueError(job)
+
         return f"{self.prefix}:job:{job}"
 
     async def _eval(self, operation: str, job: str, generation: str, **values: Any) -> Any:

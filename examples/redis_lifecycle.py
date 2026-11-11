@@ -27,6 +27,7 @@ async def main() -> None:
         message = Message(
             message_id=1, date=datetime.now(UTC), chat=Chat(id=1, type="private"), text="/redis"
         )
+
         async with Bot("123456:offline-example-token") as bot:
             await dispatcher.feed_update(bot, Update(update_id=1, message=message))
 

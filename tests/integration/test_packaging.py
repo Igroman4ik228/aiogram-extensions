@@ -28,9 +28,11 @@ def test_installed_wheel_metadata_and_typing_marker(project_root: Path, tmp_path
         assert result.returncode == 0, result.stderr or result.stdout
 
     run([uv, "build", "--wheel", "--offline", "--out-dir", str(wheel_dir)], cwd=project_root)
+
     (wheel,) = wheel_dir.glob("*.whl")
 
     run([uv, "venv", "--offline", "--python", sys.executable, str(environment)])
+
     run([uv, "pip", "install", "--offline", "--no-deps", "--python", str(python), str(wheel)])
 
     run(
@@ -61,6 +63,9 @@ def test_installed_wheel_metadata_and_typing_marker(project_root: Path, tmp_path
                 package = distribution("aiogram-extensions")
                 assert package.metadata["License-Expression"] == "MIT"
                 assert files("aiogram_extensions").joinpath("py.typed").is_file()
+                rate_limit = files("aiogram_extensions.rate_limit")
+                assert rate_limit.joinpath("_check.lua").is_file()
+                assert rate_limit.joinpath("_cooldown.lua").is_file()
                 assert package.metadata.get_all("Provides-Extra") == ["redis"]
                 requirements = package.metadata.get_all("Requires-Dist") or []
                 assert any(

@@ -43,8 +43,10 @@ class RedisConfig:
 
     def __post_init__(self) -> None:
         identifier("prefix", self.prefix)
+
         seconds("connect_timeout", self.connect_timeout)
         seconds("socket_timeout", self.socket_timeout)
+
         positive_integer("max_connections", self.max_connections)
 
         require_instance("url", self.url, str)
@@ -89,7 +91,7 @@ class RedisConnectionManager:
     """Own only clients created here; start creates a client without network I/O."""
 
     def __init__(self, config: RedisConfig | None = None, *, client: Redis | None = None) -> None:
-        self.config = config if config is not None else RedisConfig()
+        self.config: RedisConfig = config if config is not None else RedisConfig()
         require_instance("config", self.config, RedisConfig)
 
         self._client = client
@@ -106,6 +108,7 @@ class RedisConnectionManager:
     def client(self) -> Redis:
         if not self._started or self._closed or self._client is None:
             raise RedisLifecycleError
+
         return self._client
 
     async def start(self) -> Self:
@@ -144,12 +147,15 @@ class RedisConnectionManager:
 
             if self._owns_client and self._client is not None:
                 await self._client.aclose()
+
             self._closed = True
 
     def key(self, namespace: str, *parts: str) -> str:
         identifier("namespace", namespace)
+
         if not parts:
             raise ConfigurationError("parts", "must be non-empty")
+
         for part in parts:
             nonempty_string("parts", part)
 
@@ -183,6 +189,7 @@ async def redis_context(
     async with RedisConnectionManager(config, client=client) as manager:
         active_client = manager.client
         dispatcher[key] = active_client
+
         try:
             yield manager
         finally:

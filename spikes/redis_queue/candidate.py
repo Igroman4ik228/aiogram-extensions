@@ -13,6 +13,7 @@ REMOVED = "                if not fetched:\n                    continue\n"
 def patched_source(original: bytes) -> bytes:
     if hashlib.sha256(original).hexdigest() != SOURCE_SHA256:
         raise ValueError("Unexpected taskiq-redis source")  # noqa: TRY003 -- Artifact guard.
+
     text = original.decode()
     updated = text.replace(REMOVED, "", 1)
     updated = (
@@ -35,6 +36,7 @@ def patched_source(original: bytes) -> bytes:
             1,
         )
     )
+
     patch = "".join(
         difflib.unified_diff(
             text.splitlines(keepends=True),
@@ -43,8 +45,10 @@ def patched_source(original: bytes) -> bytes:
             tofile="b/taskiq_redis/redis_broker.py",
         )
     )
+
     if patch != Path(__file__).with_name("recovery.patch").read_text(encoding="utf-8"):
         raise ValueError("Recovery patch mismatch")  # noqa: TRY003 -- Reviewed patch must match.
+
     return updated.encode()
 
 
@@ -52,10 +56,13 @@ def prepare_candidate(destination: Path) -> Path:
     package = distribution("taskiq-redis")
     if package.version != "1.2.4":
         raise ValueError(package.version)
+
     source = Path(str(package.locate_file("taskiq_redis")))
     updated = patched_source((source / "redis_broker.py").read_bytes())
+
     target = destination / "taskiq_redis"
     shutil.copytree(source, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     broker_file = target / "redis_broker.py"
     broker_file.write_bytes(updated)
+
     return broker_file

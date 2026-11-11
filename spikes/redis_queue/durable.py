@@ -36,8 +36,10 @@ async def run_delivery(
         state = await journal.snapshot(job)
         await ack()
         return state.get("status", "stale") if claimed == "terminal" else "stale"
+
     if claimed == "busy":
         return "busy"  # The original pending entry must not be acknowledged here.
+
     try:
         async with asyncio.TaskGroup() as tasks:
             heartbeat = tasks.create_task(_renew(journal, job, generation, owner))
@@ -66,6 +68,7 @@ async def _owned_delivery(
 ) -> str:
     state = await journal.snapshot(job)
     method = decode(json.loads(state["wire"]))
+
     while True:
         attempt = await journal.begin_attempt(job, generation, owner)
         if attempt < 0:
@@ -74,9 +77,11 @@ async def _owned_delivery(
             await pause("after_dead")
             await ack()
             return "dead"
+
         if attempt == 0:
             await asyncio.sleep(0.05)
             continue
+
         await pause("before_request")
         try:
             await bot(method)
@@ -88,6 +93,7 @@ async def _owned_delivery(
             await journal.fail(job, generation, owner, type(exc).__name__, retry_ms=None)
         else:
             await pause("after_response")
+
             await journal.succeed(job, generation, owner)
             await pause("after_success")
             await ack()

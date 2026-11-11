@@ -1,7 +1,7 @@
 """aiogram adapters for incoming updates and outgoing Bot API requests."""
 
 from collections.abc import Awaitable, Callable, Collection
-from typing import Any
+from typing import Any, TypeVar
 
 from aiogram import BaseMiddleware, Bot
 from aiogram.client.session.middlewares.base import BaseRequestMiddleware, NextRequestMiddlewareType
@@ -14,6 +14,8 @@ from aiogram_extensions._validation import ConfigurationError
 
 from .errors import RateLimitExceededError
 from .limiter import RateLimitContext, RateLimiter
+
+_HandlerResult = TypeVar("_HandlerResult")
 
 
 class IncomingRateLimitMiddleware(BaseMiddleware):
@@ -29,10 +31,12 @@ class IncomingRateLimitMiddleware(BaseMiddleware):
     ) -> None:
         if limiter.direction != "incoming":
             raise ConfigurationError("limiter", "must use incoming direction")
+
         if any(
             rule.scope not in ("user_chat", "bot", "chat", "group") for rule in limiter.config.rules
         ):
             raise ConfigurationError("scope", "is unsupported by incoming middleware")
+
         self._limiter = limiter
         self._allowed_users = frozenset(allowed_users)
         self._allowed_chats = frozenset(allowed_chats)
@@ -40,12 +44,13 @@ class IncomingRateLimitMiddleware(BaseMiddleware):
 
     async def __call__(
         self,
-        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
+        handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[_HandlerResult]],
         event: TelegramObject,
         data: dict[str, Any],
-    ) -> Any:
+    ) -> _HandlerResult | None:
         user = data.get("event_from_user")
         chat = data.get("event_chat")
+
         if (
             not isinstance(user, User)
             or not isinstance(chat, Chat)
@@ -59,8 +64,10 @@ class IncomingRateLimitMiddleware(BaseMiddleware):
         result = await self._limiter.acquire(
             RateLimitContext(bot_id=bot.id, user_id=user.id, chat_id=chat.id, chat_type=chat.type)
         )
+
         if result.allowed:
             return await handler(event, data)
+
         return None
 
 
@@ -76,13 +83,18 @@ class OutgoingRateLimitMiddleware(BaseRequestMiddleware):
     ) -> None:
         if limiter.direction != "outgoing":
             raise ConfigurationError("limiter", "must use outgoing direction")
+
         scopes = {rule.scope for rule in limiter.config.rules}
+
         if "user_chat" in scopes:
             raise ConfigurationError("scope", "user_chat is unsupported by outgoing middleware")
+
         if "group" in scopes and chat_type is None:
             raise ConfigurationError("chat_type", "resolver is required for group rules")
+
         if "custom" in scopes and custom_key is None:
             raise ConfigurationError("custom_key", "resolver is required for custom rules")
+
         self._limiter = limiter
         self._chat_type = chat_type if "group" in scopes else None
         self._custom_key = custom_key if "custom" in scopes else None
@@ -105,9 +117,11 @@ class OutgoingRateLimitMiddleware(BaseRequestMiddleware):
             method=method.__api_method__,
             custom_key=self._custom_key(bot, method) if self._custom_key is not None else None,
         )
+
         result = await self._limiter._acquire(  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
             context, allow_missing_scope=True
         )
+
         if not result.allowed:
             raise RateLimitExceededError(result)
 

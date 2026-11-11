@@ -31,8 +31,10 @@ class _Window:
 
         while expirations and expirations[0] <= now:
             expirations.popleft()
+
         if len(expirations) >= limit:
             return expirations[0] - now
+
         return 0.0
 
     def charge(self, now: float, duration: float) -> None:
@@ -56,6 +58,7 @@ class MemoryRateLimitBackend:
         for _ in range(_CLEANUP_BATCH):
             if not self._expiry or self._expiry[0][0] > now:
                 break
+
             _, key = heapq.heappop(self._expiry)
             expires_at = self._windows[key].expires_at
             if expires_at <= now:
@@ -72,8 +75,10 @@ class MemoryRateLimitBackend:
         async with self._lock:
             now = self._clock()
             self._cleanup(now)
+
             cooldown = self._windows.get(cooldown_key) if cooldown_key is not None else None
             cooldown_delay = max(0.0, cooldown.expires_at - now) if cooldown else 0.0
+
             blocked: list[tuple[str, float]] = []
             for key, rule in buckets:
                 window = self._windows.get(key)
@@ -91,6 +96,7 @@ class MemoryRateLimitBackend:
                             expirations=deque() if rule.algorithm == "sliding_window" else None,
                         )
                         self._store(key, window)
+
                     window.charge(now, rule.window)
 
             return BackendDecision(blocked_rules=tuple(blocked), cooldown=cooldown_delay)
@@ -99,6 +105,7 @@ class MemoryRateLimitBackend:
         async with self._lock:
             now = self._clock()
             self._cleanup(now)
+
             deadline = _deadline(now, duration)
             current = self._windows.get(key)
             if current is None or current.expires_at < deadline:

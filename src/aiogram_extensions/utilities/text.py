@@ -12,9 +12,11 @@ def truncate_text(text: str, *, max_units: int, suffix: str = "…") -> str:
     require_instance("text", text, str)
     require_instance("suffix", suffix, str)
     positive_integer("max_units", max_units)
+
     suffix_size = len(suffix.encode("utf-16-le")) // 2
     if suffix_size > max_units:
         raise ConfigurationError("suffix", "must fit in max_units")
+
     budget = max_units - suffix_size
     if text.isascii():
         return text if len(text) <= max_units else text[:budget] + suffix

@@ -25,11 +25,13 @@ class RateRule:
 
     def __post_init__(self) -> None:
         identifier("name", self.name)
+
         positive_integer("limit", self.limit)
         seconds("window", self.window)
 
         if self.scope not in ("bot", "chat", "group", "method", "custom", "user_chat"):
             raise ConfigurationError("scope", "is not supported")
+
         if self.algorithm not in ("fixed_window", "sliding_window"):
             raise ConfigurationError("algorithm", "is not supported")
 
@@ -46,6 +48,7 @@ class RateLimitConfig:
 
         for rule in self.rules:
             require_instance("rules", rule, RateRule)
+
         if len({rule.name for rule in self.rules}) != len(self.rules):
             raise ConfigurationError("rules", "must have unique names")
 

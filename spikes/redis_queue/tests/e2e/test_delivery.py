@@ -65,8 +65,10 @@ async def test_required_methods_and_media_references(
                 ),
             ]
         )
+
     task = "durable_enqueue" if harness.env.get("SPIKE_DURABLE") == "1" else "deliver"
     await harness.worker()
+
     for index, method in enumerate(methods):
         await harness.producer(task, wire=encode(method), job=str(index))
         await harness.completed(str(index))
@@ -87,6 +89,7 @@ async def test_required_methods_and_media_references(
             expected,
             expected,
         ]
+
     for call in api.calls[13:]:
         assert b"shared-file-contents" in call["fields"].values()
 
@@ -102,11 +105,13 @@ async def test_hard_kill_delivery_and_idle_recovery(
 ) -> None:
     if phase == "during":
         api.hold = asyncio.Event()
+
     await harness.producer(
         wire=encode(SendMessage(chat_id=42, text="crash")),
         job="crash",
         pause=phase if phase != "during" else "",
     )
+
     worker = await harness.worker(idle_ms=200)
     if phase == "during":
 
@@ -116,6 +121,7 @@ async def test_hard_kill_delivery_and_idle_recovery(
         await until(called)
     else:
         await harness.stage("crash", phase)
+
     await harness.kill(worker)
     calls_before_restart = len(api.calls)
     assert await harness.pending() == 1
@@ -127,12 +133,15 @@ async def test_hard_kill_delivery_and_idle_recovery(
         await harness.release("crash", phase)
 
     await harness.worker(idle_ms=200)
+
     if not harness.candidate:
         await asyncio.sleep(0.6)  # Three idle intervals and six XREADGROUP block intervals.
         assert len(api.calls) == calls_before_restart
         assert await harness.pending() == 1
+
         await harness.producer(wire=encode(SendMessage(chat_id=42, text="trigger")), job="trigger")
         await harness.completed("trigger")
+
     await harness.completed("crash")
 
     assert sum(call["fields"].get("text") == "crash" for call in api.calls) == deliveries
@@ -145,17 +154,21 @@ async def test_live_long_task_can_be_claimed_by_another_worker(harness: Harness,
         job="long",
         pause="before",
     )
+
     first = await harness.worker(idle_ms=200, max_tasks=1)
     await harness.stage("long", "before")
     # Saturated worker one cannot read new traffic; its task is still alive.
     await harness.worker(idle_ms=200, max_tasks=1)
+
     await harness.producer(wire=encode(SendMessage(chat_id=42, text="trigger")), job="trigger")
 
     async def duplicated() -> bool:
         return len(set(await harness.values("owners:long"))) >= 2
 
     await until(duplicated)
+
     assert first.poll() is None
+
     await harness.release("long", "before")
     await harness.release("long", "before")
 
@@ -172,8 +185,10 @@ async def test_task_below_idle_threshold_is_not_claimed_by_another_worker(
     await harness.producer(
         wire=encode(SendMessage(chat_id=42, text="bounded")), job="bounded", pause="before"
     )
+
     await harness.worker(idle_ms=60000, max_tasks=1)
     await harness.stage("bounded", "before")
+
     await harness.worker(idle_ms=60000, max_tasks=1)
     await harness.producer(wire=encode(SendMessage(chat_id=42, text="trigger")), job="trigger")
     await harness.completed("trigger")
@@ -193,13 +208,16 @@ async def test_task_below_idle_threshold_is_not_claimed_by_another_worker(
 )
 async def test_transient_retry_and_retry_after(harness: Harness, api: API, failure: int) -> None:
     api.failures = [failure]
+
     await harness.worker()
     await harness.producer(wire=encode(SendMessage(chat_id=42, text="retry")), job="retry")
     await harness.completed("retry")
 
     assert len(api.calls) == 2
+
     if failure == 429:
         assert api.calls[1]["time"] - api.calls[0]["time"] >= 1
+
     assert await harness.pending() == 0
     assert await harness.client.xlen(f"{harness.prefix}:dlq") == 0
 
@@ -219,6 +237,7 @@ async def test_terminal_failure_dlq_and_explicit_replay(
     error: str,
 ) -> None:
     api.failures = failures.copy()
+
     await harness.worker()
     await harness.producer(wire=encode(SendMessage(chat_id=42, text="dlq")), job="dlq")
 
@@ -239,7 +258,9 @@ async def test_terminal_failure_dlq_and_explicit_replay(
 
     # Deliberately non-atomic experiment: enqueue before deleting the DLQ record.
     await harness.producer(wire=json.loads(fields["wire"]), job="replay")
+
     await harness.completed("replay")
+
     await harness.client.xdel(f"{harness.prefix}:dlq", entry_id)
 
     assert len(api.calls) == attempts + 1
@@ -249,6 +270,7 @@ async def test_terminal_failure_dlq_and_explicit_replay(
 async def test_failed_dlq_write_keeps_original_pending(harness: Harness, api: API) -> None:
     await harness.client.set(f"{harness.prefix}:dlq", "wrong-type")
     api.failures = [400]
+
     await harness.worker()
     await harness.producer(wire=encode(SendMessage(chat_id=42, text="fail-closed")), job="fail")
 
@@ -264,6 +286,7 @@ async def test_failed_dlq_write_keeps_original_pending(harness: Harness, api: AP
 
 async def test_stock_retry_is_immediate_and_has_no_dlq(harness: Harness, api: API) -> None:
     api.failures = [429, 429, 429]
+
     await harness.worker()
     await harness.producer("stock_retry", wire=encode(SendMessage(chat_id=42, text="stock")))
 
@@ -280,11 +303,14 @@ async def test_stock_retry_is_immediate_and_has_no_dlq(harness: Harness, api: AP
 async def test_worker_hooks_close_bot_and_independent_redis_client(harness: Harness) -> None:
     worker = await harness.worker()
     opened = await harness.values("opened")
+
     await harness.producer("finish")
 
     async def closed() -> bool:
         return opened[0] in await harness.values("closed")
 
     await until(closed)
+
     assert await harness.client.ping()  # pyright: ignore[reportUnknownMemberType]
+
     await harness.kill(worker)

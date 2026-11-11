@@ -69,7 +69,9 @@ async def startup(state: TaskiqState) -> None:
     )
     state.bot = Bot(token="123456:local-spike-token", session=session)  # noqa: S106
     state.http = await session.create_session()
+
     await state.redis.rpush(f"{PREFIX}:opened", str(os.getpid()))
+
     if os.environ.get("SPIKE_DURABLE") == "1":
         state.journal = DeliveryJournal(state.redis, PREFIX)
         state.dispatcher = asyncio.create_task(dispatch_loop(state.journal))
@@ -81,6 +83,7 @@ async def shutdown(state: TaskiqState) -> None:
         state.dispatcher.cancel()
         with suppress(asyncio.CancelledError):
             await state.dispatcher
+
     await state.bot.session.close()
     if not state.http.closed:
         raise RuntimeError
@@ -116,6 +119,7 @@ async def dispatch_pending(journal: DeliveryJournal) -> None:
             await durable_deliver.kicker().with_task_id(f"{job}-{generation}").kiq(job, generation)
             if os.environ.get("SPIKE_DURABLE_PAUSE") == "after_publish":
                 await gate(journal.client, job, "after_publish")
+
         await journal.dispatched(job, generation)
 
 
@@ -126,6 +130,7 @@ async def dispatch_loop(journal: DeliveryJournal) -> None:
             await journal.cleanup()
         except Exception as exc:  # noqa: BLE001 -- Keep durable outbox for retry, log no payload.
             logger.error("Outbox dispatch failed: %s", type(exc).__name__)  # noqa: TRY400 -- No exception payload/credentials.
+
         await asyncio.sleep(0.1)
 
 
@@ -143,6 +148,7 @@ async def durable_deliver(
             await gate(journal.client, job, phase)
 
     status = await run_delivery(journal, bot, job, generation, context.ack, pause)
+
     if status == "succeeded":
         await journal.client.rpush(f"{PREFIX}:completed", job)
 
@@ -156,7 +162,9 @@ async def deliver(
 ) -> None:
     client: Redis = context.state.redis
     bot: Bot = context.state.bot
+
     method = decode(wire)
+
     await client.rpush(f"{PREFIX}:owners:{job}", str(os.getpid()))
     if pause == "before":
         await gate(client, job, "before")
@@ -169,12 +177,14 @@ async def deliver(
                 delay = exc.retry_after if isinstance(exc, TelegramRetryAfter) else 0.05
                 await asyncio.sleep(delay)
                 continue
+
             failure = type(exc).__name__
         except TelegramBadRequest as exc:
             failure = type(exc).__name__
         else:
             if pause == "after":
                 await gate(client, job, "after")
+
             await context.ack()
             await client.rpush(f"{PREFIX}:completed", job)
             return
@@ -188,6 +198,7 @@ async def deliver(
                 "error": failure,
             },
         )
+
         await context.ack()
         return
 
@@ -209,6 +220,7 @@ async def finish() -> None:
 
 async def produce() -> None:
     await broker.startup()
+
     try:
         kwargs = json.loads(os.environ.get("SPIKE_KWARGS", "{}"))
         if os.environ.get("SPIKE_TASK") in {"durable_enqueue", "durable_replay"}:
@@ -224,6 +236,7 @@ async def produce() -> None:
                         await gate(client, kwargs["job"], "after_replay")
                 await dispatch_pending(journal)
             return
+
         selected = {"deliver": deliver, "stock_retry": stock_retry, "finish": finish}[
             os.environ.get("SPIKE_TASK", "deliver")
         ]

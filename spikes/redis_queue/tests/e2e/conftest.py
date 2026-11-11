@@ -44,16 +44,20 @@ class API:
         fields: dict[str, Any] = {}
         for key, value in data.items():
             fields[key] = value.file.read() if isinstance(value, web.FileField) else value
+
         self.calls.append(
             {"method": request.match_info["method"], "fields": fields, "time": time.monotonic()}
         )
+
         if self.hold is not None:
             await self.hold.wait()
+
         status = self.failures.pop(0) if self.failures else 200
         if status == 0:
             assert request.transport is not None
             request.transport.close()
             return web.Response()
+
         if status != 200:
             return web.json_response(
                 {
@@ -64,6 +68,7 @@ class API:
                 },
                 status=status,
             )
+
         message = {"message_id": len(self.calls), "date": 1, "chat": {"id": 42, "type": "private"}}
         result = [message, message] if request.match_info["method"] == "sendMediaGroup" else message
         return web.json_response({"ok": True, "result": result})
@@ -74,12 +79,15 @@ async def api() -> AsyncIterator[API]:
     api = API()
     app = web.Application()
     app.router.add_post("/bot{token}/{method}", api.handle)
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
+
     api.url = str(runner.addresses[0][0])
     api.url = f"http://{api.url}:{runner.addresses[0][1]}"
+
     try:
         yield api
     finally:
@@ -107,12 +115,14 @@ class Harness:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
+
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=15)
         finally:
             if process.returncode is None:
                 process.kill()
                 await process.wait()
+
         assert process.returncode == 0, (stdout + stderr).decode()
 
     async def worker(self, *, idle_ms: int = 5000, max_tasks: int = 4) -> subprocess.Popen[bytes]:
@@ -142,6 +152,7 @@ class Harness:
                 stderr=subprocess.STDOUT,
                 start_new_session=sys.platform != "win32",
             )
+
         self.processes.append(process)
 
         async def ready() -> bool:
@@ -154,6 +165,7 @@ class Harness:
     async def kill(self, process: subprocess.Popen[bytes]) -> None:
         if process.poll() is not None:
             return
+
         if sys.platform == "win32":
             killer = await asyncio.create_subprocess_exec(
                 "taskkill",
@@ -167,6 +179,7 @@ class Harness:
             await killer.wait()
         else:
             os.killpg(process.pid, signal.SIGKILL)
+
         await asyncio.to_thread(process.wait, 5)
 
     async def values(self, key: str) -> list[str]:
@@ -219,8 +232,10 @@ async def harness(
     candidate = bool(request.config.getoption("--recovery-candidate")) or bool(
         request.config.getoption("--durable")
     )
+
     if request.config.getoption("--durable"):
         env["SPIKE_DURABLE"] = "1"
+
     if request.config.getoption("--transport-wheel"):
         assert version("taskiq-redis") == "1.2.4+aiogramext.2"
         candidate = True
@@ -232,8 +247,10 @@ async def harness(
         broker_file = prepare_candidate(overlay)
         env["PYTHONPATH"] = str(overlay) + os.pathsep + env.get("PYTHONPATH", "")
         env["SPIKE_BROKER_SOURCE"] = str(broker_file)
+
     async with Redis.from_url(redis_url, decode_responses=True) as client:  # pyright: ignore[reportUnknownMemberType]
         harness = Harness(client, env, prefix, tmp_path, candidate=candidate)
+
         try:
             yield harness
         finally:

@@ -31,6 +31,7 @@ def seconds(name: str, value: float, *, allow_zero: bool = False) -> None:
         finite = type(value) in (int, float) and math.isfinite(value)
     except OverflowError:
         finite = False
+
     if not finite or value < 0 or (value == 0 and not allow_zero):
         raise ConfigurationError(
             name, f"must be finite and {'non-negative' if allow_zero else 'positive'}"

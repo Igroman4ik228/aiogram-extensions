@@ -39,6 +39,7 @@ def _redis_config() -> RedisConfig:
     url = os.environ.get("AIEXT_TEST_REDIS_URL")
     if url is None:
         pytest.skip("Set AIEXT_TEST_REDIS_URL to run against an isolated Redis")
+
     return RedisConfig(url=url, prefix=f"aie-test-{uuid4().hex}")
 
 
@@ -52,6 +53,7 @@ async def backends(
         return
 
     config = _redis_config()
+
     async with AsyncExitStack() as stack:
         managers = [
             await stack.enter_async_context(RedisConnectionManager(config)) for _ in range(2)
@@ -77,6 +79,7 @@ async def test_concurrent_checks_share_budget_and_isolate_context(
         for result in decisions
         if not result.allowed
     )
+
     for isolated in (
         RateLimitContext(bot_id=4, user_id=2, chat_id=3),
         RateLimitContext(bot_id=1, user_id=4, chat_id=3),
@@ -101,6 +104,7 @@ async def test_combined_rules_do_not_charge_on_denial(
     assert (await first.check(one)).allowed
     assert (await second.check(one)).triggered_rules == ("pair",)
     assert (await second.check(two)).allowed
+
     denial = await first.check(one)
 
     assert denial.triggered_rules == ("chat", "pair")
@@ -128,6 +132,7 @@ async def test_wait_rechecks_after_window(
     context = RateLimitContext(bot_id=1)
 
     assert (await limiter.check(context)).allowed
+
     async with asyncio.timeout(3):
         assert (await limiter.acquire(context)).allowed
 
@@ -147,6 +152,7 @@ async def test_telegram_cooldown_is_shared_across_limiters(
     async with Bot("123456:synthetic") as bot:
         bot.session.middleware(OutgoingRateLimitMiddleware(first))
         bot.session.make_request = AsyncMock(side_effect=flood)
+
         with pytest.raises(TelegramRetryAfter):
             await bot(request)
 
@@ -174,25 +180,31 @@ async def test_redis_command_error_fails_closed_without_charging_other_rules() -
             backend=RedisRateLimitBackend(manager),
             events=EventDispatcher((record,)),
         )
+
         key = manager.key("rate_limit", "incoming", "1", "broken", "fixed_window", "bot")
         await manager.client.set(key, "invalid", ex=10)
+
         context = RateLimitContext(bot_id=1)
 
         with pytest.raises(RateLimitBackendError):
             await limiter.check(context)
 
         assert observed == [BackendErrorEvent(component="rate_limit", operation="check")]
+
         await manager.client.delete(key)
         assert (await limiter.check(context)).allowed
 
 
 async def test_redis_acl_error_does_not_charge_any_rule() -> None:
     config = _redis_config()
+
     username = f"limiter-{uuid4().hex}"
     password = uuid4().hex
+
     parsed = urlsplit(config.url)
     address = parsed.netloc.rsplit("@", 1)[-1]
     limited_url = parsed._replace(netloc=f"{username}:{password}@{address}").geturl()
+
     policy = RateLimitConfig(
         rules=(
             RateRule(name="fixed", scope="bot", limit=1, window=10),
@@ -210,23 +222,27 @@ async def test_redis_acl_error_does_not_charge_any_rule() -> None:
             keys=[f"{config.prefix}:*"],
             commands=["+@all", "-pexpire"],
         )
+
         try:
             async with RedisConnectionManager(replace(config, url=limited_url)) as restricted:
                 limiter = RateLimiter(
                     policy, direction="incoming", backend=RedisRateLimitBackend(restricted)
                 )
+
                 with pytest.raises(RateLimitBackendError):
                     await limiter.check(context)
         finally:
             await admin.client.acl_deluser(username)  # pyright: ignore[reportUnknownMemberType]
 
         retry = RateLimiter(policy, direction="incoming", backend=RedisRateLimitBackend(admin))
+
         assert (await retry.check(context)).allowed
 
 
 @pytest.mark.parametrize("algorithm", ["fixed_window", "sliding_window"])
 async def test_redis_removes_idle_window_after_ttl(algorithm: Algorithm) -> None:
     rule = RateRule(name="all", scope="bot", limit=1, window=1, algorithm=algorithm)
+
     async with RedisConnectionManager(_redis_config()) as manager:
         limiter = RateLimiter(
             RateLimitConfig(rules=(rule,)),
@@ -259,6 +275,7 @@ async def test_redis_connection_failure_stops_outgoing_request() -> None:
         reserved.bind(("127.0.0.1", 0))
         port = reserved.getsockname()[1]
         config = RedisConfig(url=f"redis://127.0.0.1:{port}/0")
+
         async with RedisConnectionManager(config) as manager, Bot("123456:synthetic") as bot:
             limiter = RateLimiter(
                 RateLimitConfig(rules=(RateRule(name="bot", scope="bot", limit=1, window=10),)),

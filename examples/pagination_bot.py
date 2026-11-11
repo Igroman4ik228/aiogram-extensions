@@ -30,6 +30,7 @@ def build_router() -> Router:
         render=render_page,
         config=NavigationConfig(prefix="catalog", current_text="{page}/{pages}", next_text="Next"),
     )
+
     router.include_router(pagination.router)
 
     @router.message(Command("catalog"))
@@ -45,8 +46,10 @@ async def main(*, live: bool) -> None:
         token = os.environ.get("BOT_TOKEN")
         if not token:
             raise SystemExit("Set BOT_TOKEN before running with --live.")  # noqa: TRY003
+
         dispatcher = Dispatcher()
         dispatcher.include_router(build_router())
+
         async with Bot(token) as bot:
             # aiogram's public signature contains an untyped UNSET default.
             await dispatcher.start_polling(  # pyright: ignore[reportUnknownMemberType]
@@ -55,6 +58,7 @@ async def main(*, live: bool) -> None:
         return
 
     paginator = catalog_source()
+
     for number in (1, 2):
         page = await paginator.page(number)
         print(f"Page {page.number}/{page.total_pages}")
@@ -64,4 +68,5 @@ async def main(*, live: bool) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true")
+
     asyncio.run(main(live=parser.parse_args().live))

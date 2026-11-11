@@ -62,6 +62,7 @@ async def test_incoming_middleware_isolates_pairs_and_honors_exemptions() -> Non
         (None, 3, "anonymous", True),
         (None, 3, "anonymous", True),
     )
+
     async with Bot("123456:synthetic") as bot:
         for update_id, (user_id, chat_id, text, allowed) in enumerate(cases, start=1):
             user = User(id=user_id, is_bot=False, first_name="Reader") if user_id else None
@@ -72,6 +73,7 @@ async def test_incoming_middleware_isolates_pairs_and_honors_exemptions() -> Non
                 from_user=user,
                 text=text,
             )
+
             result = await dispatcher.feed_update(bot, Update(update_id=update_id, message=message))
 
             assert result == (update_id if allowed else None)
@@ -82,6 +84,7 @@ async def test_incoming_middleware_isolates_pairs_and_honors_exemptions() -> Non
             query="",
             offset="",
         )
+
         for update_id in (100, 101):
             assert (
                 await dispatcher.feed_update(bot, Update(update_id=update_id, inline_query=query))
@@ -96,6 +99,7 @@ async def test_outgoing_cooldown_is_bot_wide_and_request_is_not_retried() -> Non
         direction="outgoing",
         backend=MemoryRateLimitBackend(clock=lambda: now),
     )
+
     request = SendMessage(chat_id=10, text="hello")
     flood = TelegramRetryAfter(method=request, message="slow down", retry_after=5)
     transport = AsyncMock(side_effect=[flood, True, True])
@@ -110,6 +114,7 @@ async def test_outgoing_cooldown_is_bot_wide_and_request_is_not_retried() -> Non
 
         assert raised.value is flood
         assert transport.await_count == 1
+
         now = 2
         with pytest.raises(RateLimitExceededError) as denied:
             await bot.get_me()
@@ -119,6 +124,7 @@ async def test_outgoing_cooldown_is_bot_wide_and_request_is_not_retried() -> Non
         assert transport.await_count == 1
 
         await other(request)
+
         now = 5
         await bot(request)
         with pytest.raises(RateLimitExceededError) as charged:
@@ -141,6 +147,7 @@ async def test_outgoing_composes_bot_method_chat_group_and_custom_rules() -> Non
         ),
         direction="outgoing",
     )
+
     transport = AsyncMock(return_value=True)
 
     async with Bot("123456:synthetic") as bot:
@@ -156,15 +163,18 @@ async def test_outgoing_composes_bot_method_chat_group_and_custom_rules() -> Non
         )
 
         await bot.send_message(-100, "one")
+
         with pytest.raises(RateLimitExceededError) as group:
             await bot.send_message(-100, "one")
 
         assert group.value.result.triggered_rules == ("chat", "group", "custom")
+
         await bot.send_message(-200, "two")
         with pytest.raises(RateLimitExceededError) as unknown:
             await bot.send_message(-200, "three")
 
         assert unknown.value.result.triggered_rules == ("method", "chat")
+
         await bot.get_me()
         with pytest.raises(RateLimitExceededError) as global_limit:
             await bot.get_me()

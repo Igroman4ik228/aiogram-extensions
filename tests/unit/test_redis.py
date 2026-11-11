@@ -59,10 +59,12 @@ async def test_owned_client_is_created_lazily_and_closed_once(
         assert manager.client is client
         assert manager.owns_client
         await manager.start()
+
     await manager.aclose()
 
     factory.assert_called_once()
     assert factory.call_args.args[0] == "redis://localhost:6379/0"
+
     client.aclose.assert_awaited_once()
 
 
@@ -71,9 +73,12 @@ async def test_lifecycle_rejects_access_before_start_and_restart_after_close() -
 
     with pytest.raises(RedisLifecycleError):
         _ = manager.client
+
     await manager.aclose()
+
     with pytest.raises(RedisLifecycleError):
         await manager.start()
+
     with pytest.raises(RedisLifecycleError):
         _ = manager.client
 
@@ -82,9 +87,11 @@ async def test_owned_client_closes_after_body_failure(monkeypatch: pytest.Monkey
     close = AsyncMock()
     client = AsyncMock(spec=Redis, aclose=close)
     monkeypatch.setattr(Redis, "from_url", Mock(return_value=client))
+
     with pytest.raises(LookupError):
         async with RedisConnectionManager():
             raise LookupError
+
     close.assert_awaited_once()
 
 
@@ -93,10 +100,12 @@ async def test_failed_close_can_be_retried(monkeypatch: pytest.MonkeyPatch) -> N
     client = AsyncMock(spec=Redis, aclose=close)
     monkeypatch.setattr(Redis, "from_url", Mock(return_value=client))
     manager = RedisConnectionManager()
+
     await manager.start()
 
     with pytest.raises(OSError, match="disconnect"):
         await manager.aclose()
+
     assert manager.client is client
 
     await manager.aclose()
@@ -111,6 +120,7 @@ async def test_concurrent_close_releases_owned_client_once(monkeypatch: pytest.M
     manager = RedisConnectionManager()
 
     await asyncio.gather(manager.start(), manager.start())
+
     await asyncio.gather(manager.aclose(), manager.aclose())
 
     close.assert_awaited_once()

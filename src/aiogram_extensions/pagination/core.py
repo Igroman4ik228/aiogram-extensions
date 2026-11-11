@@ -30,6 +30,7 @@ class OffsetResult(Generic[T_co]):
 
     def __post_init__(self) -> None:
         require_instance("items", self.items, tuple)
+
         if type(self.total) is not int or self.total < 0:
             raise PaginationError("total", "must be a non-negative integer")
 
@@ -44,12 +45,15 @@ class SequenceSource(Generic[T_co]):
     def __init__(self, items: Sequence[T_co]) -> None:
         if isinstance(items, (str, bytes, bytearray)):
             raise PaginationError("source", "must be a sequence of items, not text or bytes")
+
         self._items = tuple(items)
 
     async def fetch(self, *, offset: int, limit: int) -> OffsetResult[T_co]:
         if type(offset) is not int or offset < 0:
             raise PaginationError("offset", "must be a non-negative integer")
+
         positive_integer("limit", limit)
+
         return OffsetResult(items=self._items[offset : offset + limit], total=len(self._items))
 
 
@@ -62,6 +66,7 @@ class Page(OffsetResult[T_co]):
         super().__post_init__()
         positive_integer("page number", self.number)
         positive_integer("limit", self.limit)
+
         if self.number > self.total_pages:
             raise PageOutOfRangeError
 
@@ -88,6 +93,7 @@ class Page(OffsetResult[T_co]):
 class Paginator(Generic[T_co]):
     def __init__(self, source: Sequence[T_co] | OffsetSource[T_co], *, page_size: int = 10) -> None:
         positive_integer("page_size", page_size)
+
         self._source: OffsetSource[T_co] = (
             SequenceSource(source) if isinstance(source, Sequence) else source
         )
@@ -99,6 +105,7 @@ class Paginator(Generic[T_co]):
 
     async def page(self, number: int = 1) -> Page[T_co]:
         positive_integer("page number", number)
+
         offset = (number - 1) * self.page_size
         result = await self._source.fetch(offset=offset, limit=self.page_size)
 
@@ -130,6 +137,7 @@ class CursorResult(Generic[T_co]):
 
     def __post_init__(self) -> None:
         require_instance("items", self.items, tuple)
+
         _validate_cursor(self.next_cursor)
         _validate_cursor(self.previous_cursor)
 
@@ -146,6 +154,7 @@ class CursorPage(CursorResult[T_co]):
 
         if len(self.items) > self.limit:
             raise PaginationError("source", "returned more items than limit")
+
         if self.cursor is not None and self.cursor in (self.next_cursor, self.previous_cursor):
             raise PaginationError("source", "returned a cursor pointing to the current page")
 
@@ -157,6 +166,7 @@ class CursorSource(Protocol[T_co]):
 class CursorPaginator(Generic[T_co]):
     def __init__(self, source: CursorSource[T_co], *, page_size: int = 10) -> None:
         positive_integer("page_size", page_size)
+
         self._source = source
         self._page_size = page_size
 
@@ -166,6 +176,7 @@ class CursorPaginator(Generic[T_co]):
 
     async def page(self, cursor: str | None = None) -> CursorPage[T_co]:
         _validate_cursor(cursor)
+
         result = await self._source.fetch(cursor=cursor, limit=self.page_size)
 
         return CursorPage(

@@ -18,6 +18,7 @@ async def main() -> None:
     rule = limiter.rules[0]
     print(f"Incoming rule: {rule.scope}/{rule.algorithm}")
     print(f"Queue capacity: {queue.maxsize}")
+
     events = EventDispatcher((observe,))
     await events.emit(TaskEvent(kind="task_enqueued", task_id="example", generation="1"))
 

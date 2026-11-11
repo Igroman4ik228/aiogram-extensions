@@ -17,6 +17,7 @@ def test_rebuild_is_deterministic_and_preserves_unpatched_files() -> None:
     path = ROOT / ".venv/upstream-taskiq-redis.whl"
     if not path.is_file():
         pytest.skip("Cache the pinned upstream wheel with build_transport.py --download")
+
     upstream = path.read_bytes()
 
     first = build(upstream)
@@ -32,6 +33,7 @@ def test_rebuild_is_deterministic_and_preserves_unpatched_files() -> None:
         for name in original.namelist():
             if name.startswith("taskiq_redis/") and not name.endswith(("/", "redis_broker.py")):
                 assert wheel.read(name) == original.read(name)
+
         assert wheel.read(
             "taskiq_redis-1.2.4+aiogramext.2.dist-info/licenses/LICENSE"
         ) == original.read("taskiq_redis-1.2.4.dist-info/licenses/LICENSE")

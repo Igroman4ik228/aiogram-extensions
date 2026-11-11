@@ -18,6 +18,7 @@ async def test_catalog_command_and_buttons_edit_the_message(project_root: Path) 
     dispatcher.include_router(example["build_router"]())
 
     bot = Bot("123456:synthetic")
+
     sent = Message(message_id=20, date=datetime.now(UTC), chat=Chat(id=10, type="private")).as_(bot)
     transport = AsyncMock(side_effect=[sent, True, True, True, True, True])
     bot.session.make_request = transport
@@ -31,6 +32,7 @@ async def test_catalog_command_and_buttons_edit_the_message(project_root: Path) 
         await dispatcher.feed_update(bot, Update(update_id=1, message=command))
 
         assert transport.await_count == 1
+
         initial = transport.call_args_list[0].args[1]
         assert isinstance(initial, SendMessage)
         assert initial.text == "Catalog\nApple\nBanana"
@@ -46,6 +48,7 @@ async def test_catalog_command_and_buttons_edit_the_message(project_root: Path) 
 
         other_user = User(id=31, is_bot=False, first_name="Guest")
         guest_query = query.model_copy(update={"id": "guest", "from_user": other_user})
+
         await dispatcher.feed_update(bot, Update(update_id=2, callback_query=guest_query))
 
         denied = transport.call_args.args[1]
@@ -56,6 +59,7 @@ async def test_catalog_command_and_buttons_edit_the_message(project_root: Path) 
         await dispatcher.feed_update(bot, Update(update_id=3, callback_query=query))
 
         assert isinstance(transport.call_args_list[2].args[1], AnswerCallbackQuery)
+
         edit = transport.call_args_list[3].args[1]
         assert isinstance(edit, EditMessageText)
         assert edit.text == "Catalog\nCherry\nDate"
@@ -70,13 +74,16 @@ async def test_catalog_command_and_buttons_edit_the_message(project_root: Path) 
         await dispatcher.feed_update(bot, Update(update_id=4, callback_query=query))
 
         assert transport.await_count == 5
+
         answer = transport.call_args.args[1]
         assert isinstance(answer, AnswerCallbackQuery)
         assert answer.text == "Navigation expired. Open the list again."
 
         await dispatcher.emit_shutdown()
         current_data = edit.reply_markup.inline_keyboard[0][0].callback_data
+
         current_query = query.model_copy(update={"id": "closed", "data": current_data})
+
         await dispatcher.feed_update(bot, Update(update_id=5, callback_query=current_query))
 
         closed = transport.call_args.args[1]
@@ -88,20 +95,25 @@ async def test_catalog_button_can_be_retried_after_a_rejected_edit(project_root:
     example = runpy.run_path(str(project_root / "examples" / "pagination_bot.py"))
     dispatcher = Dispatcher()
     dispatcher.include_router(example["build_router"]())
+
     chat = Chat(id=10, type="private")
     user = User(id=30, is_bot=False, first_name="Reader")
     now = datetime.now(UTC)
     command = Message(message_id=1, date=now, chat=chat, from_user=user, text="/catalog")
     sent = Message(message_id=20, date=now, chat=chat)
+
     rejected = TelegramBadRequest(method=EditMessageText(text="Catalog"), message="Rejected edit")
     transport = AsyncMock(side_effect=[sent, True, rejected, True, True])
 
     async with Bot("123456:synthetic") as bot:
         bot.session.make_request = transport
+
         await dispatcher.feed_update(bot, Update(update_id=1, message=command))
+
         send = transport.call_args.args[1]
         assert isinstance(send, SendMessage)
         assert isinstance(send.reply_markup, InlineKeyboardMarkup)
+
         data = send.reply_markup.inline_keyboard[0][-1].callback_data
         query = CallbackQuery(
             id="next", from_user=user, chat_instance="chat", message=sent, data=data
@@ -109,7 +121,9 @@ async def test_catalog_button_can_be_retried_after_a_rejected_edit(project_root:
 
         with pytest.raises(TelegramBadRequest, match="Rejected edit"):
             await dispatcher.feed_update(bot, Update(update_id=2, callback_query=query))
+
         retry = query.model_copy(update={"id": "retry"})
+
         await dispatcher.feed_update(bot, Update(update_id=3, callback_query=retry))
 
     edit = transport.call_args.args[1]

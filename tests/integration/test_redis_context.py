@@ -11,6 +11,7 @@ from aiogram_extensions.redis import redis_context
 
 async def test_redis_context_unbinds_borrowed_client_after_error() -> None:
     dispatcher = Dispatcher(redis="existing dependency")
+
     async with Redis() as client:
         close = AsyncMock(wraps=client.aclose)
         client.aclose = close

@@ -10,6 +10,7 @@ async def main() -> None:
         RateLimitConfig(rules=(RateRule(name="activity", limit=1, window=60),)),
         direction="incoming",
     )
+
     first_user = RateLimitContext(bot_id=1, chat_id=2, user_id=3)
     second_user = RateLimitContext(bot_id=1, chat_id=2, user_id=4)
 

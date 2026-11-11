@@ -24,5 +24,6 @@ class EnqueueResult:
     def __post_init__(self) -> None:
         nonempty_string("task_id", self.task_id)
         nonempty_string("generation", self.generation)
+
         if type(self.duplicate) is not bool:
             raise ConfigurationError("duplicate", "must be a boolean")

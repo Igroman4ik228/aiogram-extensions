@@ -20,11 +20,13 @@ class RetryConfig:
 
     def __post_init__(self) -> None:
         positive_integer("max_attempts", self.max_attempts)
+
         seconds("base_delay", self.base_delay)
         seconds("max_delay", self.max_delay)
 
         if self.max_delay < self.base_delay:
             raise ConfigurationError("max_delay", "must be at least base_delay")
+
         if type(self.retry_unknown) is not bool:
             raise ConfigurationError("retry_unknown", "must be a boolean")
 
@@ -49,9 +51,11 @@ class QueueConfig:
         seconds("drain_timeout", self.drain_timeout)
         seconds("idempotency_ttl", self.idempotency_ttl)
         seconds("terminal_ttl", self.terminal_ttl)
+
         if self.enqueue_timeout is not None:
             seconds("enqueue_timeout", self.enqueue_timeout)
 
         if self.overflow not in ("wait", "reject"):
             raise ConfigurationError("overflow", "must be wait or reject")
+
         require_instance("retry", self.retry, RetryConfig)

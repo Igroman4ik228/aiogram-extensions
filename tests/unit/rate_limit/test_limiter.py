@@ -54,15 +54,19 @@ async def test_rejection_does_not_charge_other_rules(algorithm: Algorithm) -> No
     other = RateLimitContext(bot_id=1, chat_id=2, user_id=4)
 
     assert (await limiter.check(first)).allowed
+
     now = 1
     assert await limiter.check(first) == RateLimitResult(
         allowed=False, retry_after=3, triggered_rules=("pair",)
     )
+
     assert (await limiter.check(other)).allowed
+
     now = 2
     assert await limiter.check(first) == RateLimitResult(
         allowed=False, retry_after=8, triggered_rules=("chat", "pair")
     )
+
     now = 10
     assert (await limiter.check(first)).allowed
 
@@ -83,14 +87,18 @@ async def test_window_boundaries_follow_accepted_events(
     context = RateLimitContext(bot_id=1, chat_id=2, user_id=3)
 
     assert (await limiter.check(context)).allowed
+
     now = 2
     assert (await limiter.check(context)).allowed
+
     now = 4
     assert (await limiter.check(context)).allowed
+
     decision = await limiter.check(context)
 
     assert decision.allowed is second_admitted
     assert decision.retry_after == expected_delay
+
     now = 8
     assert (await limiter.check(context)).allowed
 
@@ -105,6 +113,7 @@ async def test_window_shorter_than_clock_precision_still_limits(algorithm: Algor
     context = RateLimitContext(bot_id=1, chat_id=2, user_id=3)
 
     assert (await limiter.check(context)).allowed
+
     decision = await limiter.check(context)
 
     assert decision.triggered_rules == ("pair",)
@@ -126,6 +135,7 @@ async def test_cancelled_wait_does_not_reserve_next_window() -> None:
         events=EventDispatcher((record,)),
     )
     context = RateLimitContext(bot_id=1, chat_id=2, user_id=3)
+
     assert (await limiter.acquire(context)).allowed
 
     task = asyncio.create_task(limiter.acquire(context))
