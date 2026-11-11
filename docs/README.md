@@ -2,12 +2,10 @@
 
 [Русский](README_RU.md)
 
-Modular extensions and utilities for aiogram 3. Planned features include rate
-limiting, message queues, pagination and observability hooks.
+Modular extensions and utilities for aiogram 3.
 
-**Under development:** pagination core and aiogram navigation, validated
-configurations and results, typed callbacks and a Redis connection manager are
-available. Limiter algorithms, middleware and queue workers are not implemented yet.
+**Under development.** Rate limiting, pagination, typed callbacks and Redis
+connection management are available. Message queues are planned.
 
 ## Getting started
 
@@ -38,6 +36,7 @@ uv run --locked examples/contracts.py
 uv run --locked examples/redis_lifecycle.py
 uv run --locked examples/pagination_core.py
 uv run --locked examples/pagination_bot.py
+uv run --locked examples/rate_limit.py
 ```
 
 - [Package information](../examples/package_info.py): import the package and inspect
@@ -58,8 +57,10 @@ uv run --locked examples/pagination_bot.py
   live polling, set `BOT_TOKEN` and run `uv run --locked examples/pagination_bot.py --live`.
   Live mode requires a real bot token and access to Telegram.
 
-All six examples in their default modes run without credentials, network access or external services.
-Limiter and queue examples will accompany their implementations.
+- [Rate limiting](../examples/rate_limit.py) demonstrates direct checks and
+  independent budgets for users in one chat.
+
+All examples in their default modes run without credentials, network access or external services.
 Examples are linted, type-checked and [tested as subprocesses](../tests/integration/test_examples.py).
 
 ## Pagination and utilities
@@ -201,9 +202,8 @@ not replace them. See [Telegram entity offsets](https://core.telegram.org/bots/a
 
 ## Stage 2 contracts
 
-The following types and Redis lifecycle are implemented. Limiter and queue behavior
-described here is the contract for stages 4–6, not a current runtime guarantee.
-The package root exports no functional API. Import from functional modules:
+Import the public API from the feature modules. The queue behavior below
+describes the contract for stages 5–6.
 
 ```python
 from aiogram_extensions.rate_limit import RateLimitConfig, RateLimitResult, RateRule
@@ -234,7 +234,45 @@ ASCII letters, digits, `_`, `.` and `-`.
 
 ### Limiter decisions
 
-Keys isolate direction, rule name, algorithm and numeric bot ID (never its token).
+Create a `RateLimiter(config, direction="incoming")` for direct checks. Pass
+`RateLimitContext(bot_id=..., user_id=..., chat_id=...)` to
+`await limiter.check(context)` for a single check. Use
+`await limiter.acquire(context)` to apply the configured reject or wait policy.
+The configuration and direction are read-only. Create a new limiter to change them.
+
+```python
+from aiogram_extensions.rate_limit import RateLimitConfig, RateLimiter, RateRule
+from aiogram_extensions.rate_limit.middleware import (
+    IncomingRateLimitMiddleware,
+    OutgoingRateLimitMiddleware,
+)
+
+incoming = RateLimiter(
+    RateLimitConfig(rules=(RateRule(name="activity", limit=5, window=1),)),
+    direction="incoming",
+)
+outgoing = RateLimiter(
+    RateLimitConfig(
+        rules=(RateRule(name="send", scope="chat", limit=1, window=1),),
+        on_limit="wait",
+    ),
+    direction="outgoing",
+)
+dispatcher.update.outer_middleware(IncomingRateLimitMiddleware(incoming))
+bot.session.middleware(OutgoingRateLimitMiddleware(outgoing))
+```
+
+Use these example budgets as starting settings for your workload. Telegram quotas
+can differ. Incoming middleware accepts `allowed_users`, `allowed_chats` and an
+`exempt(event)` predicate. A rejection ends update processing. Outgoing rejection
+raises `RateLimitExceededError` with a `result` attribute. Outgoing chat rules
+apply to methods with a `chat_id`. Group and custom rules require a
+`chat_type(bot, chat_id)` or `custom_key(bot, method)` resolver, respectively.
+A resolver can return `None` when the rule does not apply. Use consistent chat
+identifiers and keep tokens and message contents out of custom keys.
+[aiogram session middleware](https://docs.aiogram.dev/en/latest/api/session/middleware.html)
+
+Keys isolate direction, rule name, algorithm, scope and numeric bot ID.
 All processes sharing a rule name/namespace must use identical settings; rename
 the rule or namespace when changing settings. Additional scope identifiers:
 
@@ -250,18 +288,36 @@ the rule or namespace when changing settings. Additional scope identifiers:
 Direct checks missing required user/chat/method/custom context raise `ValueError`.
 Fixed Window starts at the first accepted event and uses `[start, start + window)`;
 Sliding Window counts accepted events in `(now - window, now]`. Memory uses a
-monotonic clock, Redis server `TIME`; one sample per decision. Expired state is
-removed on access and in bounded cleanup; Redis additionally uses TTL.
+monotonic clock and performs bounded cleanup on activity. Redis uses the server's
+clock and key TTLs at millisecond resolution, rounding durations up.
+
+Memory is the default. Reuse one `MemoryRateLimitBackend()` on one event loop to
+share budgets between limiters. For multiple processes, use
+`backend=RedisRateLimitBackend(manager)` with a started `RedisConnectionManager`
+in each process and the same Redis database and prefix. Use standalone Redis
+7.2.5 (the tested version) with `noeviction` and permission to run Lua scripts and
+their commands. With a supplied client, disable automatic retries of commands
+whose outcome can be unknown after a timeout.
+[Redis Lua scripting](https://redis.io/docs/latest/develop/programmability/eval-intro/)
 
 Check/charge all applicable rules atomically. On rejection, charge none.
 `triggered_rules` follows configuration order; `retry_after` is the maximum wait
 among blocking rules. HTTP failure does not refund an admitted attempt. Reject
 returns denial; wait asynchronously sleeps and rechecks, without reserving capacity
 while asleep. Cancellation propagates; already admitted attempts remain counted.
-Backend failure raises `RateLimitBackendError` (a `RateLimitError`), without a send
-or fallback. Outgoing middleware records `TelegramRetryAfter` cooldown and re-raises
-the error; the queue, or a standalone caller, owns HTTP retries. No nested retry
-loop is introduced. Limits are application settings, not guaranteed Telegram quotas.
+Backend failure raises `RateLimitBackendError` before the request proceeds.
+After `TelegramRetryAfter`, outgoing middleware records a bot-wide cooldown
+because Telegram supplies a duration without a quota scope. It then propagates
+the original error so the caller can decide whether to retry. A cooldown write
+failure raises `RateLimitBackendError`. During cooldown, denials include
+`telegram_retry_after` after any blocking rule names. Pass `events=EventDispatcher(...)`
+to receive `LimitExceededEvent` and `BackendErrorEvent`.
+
+To include tests with a real Redis server, set `AIEXT_TEST_REDIS_URL` to an isolated
+instance and run `uv run --locked pytest tests/integration/rate_limit`. The Redis
+account used by the tests needs permission to create and remove a temporary ACL
+user. The Redis server cases skip when the variable is absent. Middleware tests
+use a Telegram stub.
 
 ### Queue decisions
 

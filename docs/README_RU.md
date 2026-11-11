@@ -2,12 +2,10 @@
 
 [English](README.md)
 
-Модульные расширения и утилиты для aiogram 3. В планах — ограничение частоты
-запросов, очереди сообщений, пагинация и инструменты наблюдаемости.
+Модульные расширения и утилиты для aiogram 3.
 
-**В разработке:** доступны ядро пагинации и aiogram-навигация, конфигурации с
-валидацией, типы результатов, callbacks и Redis connection manager. Алгоритмы
-limiter, middleware и workers очереди пока не реализованы.
+**В разработке.** Доступны ограничение частоты запросов, пагинация, типизированные
+callbacks и управление подключениями к Redis. Очереди сообщений запланированы.
 
 ## Начало работы
 
@@ -38,6 +36,7 @@ uv run --locked examples/contracts.py
 uv run --locked examples/redis_lifecycle.py
 uv run --locked examples/pagination_core.py
 uv run --locked examples/pagination_bot.py
+uv run --locked examples/rate_limit.py
 ```
 
 - [Информация о пакете](../examples/package_info.py): импорт пакета, проверка его
@@ -59,8 +58,10 @@ uv run --locked examples/pagination_bot.py
   `uv run --locked examples/pagination_bot.py --live`.
   Режим `--live` требует настоящего токена бота и доступа к Telegram.
 
-Все шесть примеров в режиме по умолчанию работают без учётных данных, сети и внешних сервисов.
-Примеры limiter и очереди появятся вместе с реализациями.
+- [Ограничение частоты](../examples/rate_limit.py) показывает прямые проверки и
+  независимые лимиты пользователей в одном чате.
+
+Все примеры в режиме по умолчанию работают без учётных данных, сети и внешних сервисов.
 Примеры проходят линтер, проверку типов и
 [тестирование в отдельных процессах](../tests/integration/test_examples.py).
 
@@ -206,9 +207,8 @@ Telegram-метода. Для форматирования используйт�
 
 ## Контракты этапа 2
 
-Типы и жизненный цикл Redis ниже реализованы. Описанное поведение limiter и очереди —
-контракт для этапов 4–6, а не текущая гарантия работы. Корень пакета не экспортирует
-функциональный API. Импортируйте из функциональных модулей:
+Импортируйте публичный API из функциональных модулей. Раздел об очереди ниже
+описывает контракт для этапов 5–6.
 
 ```python
 from aiogram_extensions.rate_limit import RateLimitConfig, RateLimitResult, RateRule
@@ -239,7 +239,46 @@ bool и дробные числа. Время задаётся конечным 
 
 ### Решения по limiter
 
-Ключи изолируют направление, имя правила, алгоритм и числовой bot ID (не токен).
+Для прямых проверок создайте `RateLimiter(config, direction="incoming")`.
+Передайте `RateLimitContext(bot_id=..., user_id=..., chat_id=...)` в
+`await limiter.check(context)` для одной проверки. Вызов
+`await limiter.acquire(context)` применяет настроенный режим отказа или ожидания.
+Конфигурация и направление доступны только для чтения. Чтобы изменить их,
+создайте новый limiter.
+
+```python
+from aiogram_extensions.rate_limit import RateLimitConfig, RateLimiter, RateRule
+from aiogram_extensions.rate_limit.middleware import (
+    IncomingRateLimitMiddleware,
+    OutgoingRateLimitMiddleware,
+)
+
+incoming = RateLimiter(
+    RateLimitConfig(rules=(RateRule(name="activity", limit=5, window=1),)),
+    direction="incoming",
+)
+outgoing = RateLimiter(
+    RateLimitConfig(
+        rules=(RateRule(name="send", scope="chat", limit=1, window=1),),
+        on_limit="wait",
+    ),
+    direction="outgoing",
+)
+dispatcher.update.outer_middleware(IncomingRateLimitMiddleware(incoming))
+bot.session.middleware(OutgoingRateLimitMiddleware(outgoing))
+```
+
+Используйте лимиты из примера как стартовые настройки для своей нагрузки.
+Квоты Telegram могут отличаться. Incoming middleware принимает `allowed_users`,
+`allowed_chats` и предикат `exempt(event)`. При отказе обработка апдейта завершается.
+При отказе outgoing middleware выбрасывает `RateLimitExceededError` с атрибутом
+`result`. Исходящие правила `chat` применяются к методам с `chat_id`. Для `group`
+и `custom` задайте функции `chat_type(bot, chat_id)` и `custom_key(bot, method)`
+соответственно. Функция может вернуть `None`, если правило неприменимо. Используйте
+одинаковые идентификаторы чатов и исключите токены и текст сообщений из custom keys.
+[Middleware сессии aiogram](https://docs.aiogram.dev/en/latest/api/session/middleware.html)
+
+Ключи изолируют направление, имя правила, алгоритм, scope и числовой bot ID.
 Процессы с общими именем правила/namespace используют одинаковые настройки;
 при изменении настроек меняйте имя правила или namespace. Дополнительные идентификаторы:
 
@@ -255,18 +294,37 @@ bool и дробные числа. Время задаётся конечным 
 Прямая проверка без необходимых user/chat/method/custom данных вызывает `ValueError`.
 Fixed Window начинается с первого принятого события: `[start, start + window)`;
 Sliding Window считает принятые события в `(now - window, now]`. Memory использует
-монотонные часы, Redis — серверный `TIME`; одно измерение на решение. Устаревшее
-состояние удаляется при обращении и ограниченной очистке; Redis также использует TTL.
+монотонные часы и очищает устаревшие записи ограниченными порциями при обращениях.
+Redis использует часы сервера и TTL ключей с точностью до миллисекунды. Длительности
+округляются вверх.
+
+По умолчанию используется Memory. Для общих бюджетов в пределах одного event loop
+передайте один экземпляр `MemoryRateLimitBackend()` в несколько limiter. Для нескольких
+процессов используйте `backend=RedisRateLimitBackend(manager)` с запущенным
+`RedisConnectionManager` в каждом процессе и общей базой и префиксом Redis. Используйте
+standalone Redis 7.2.5 (проверенная версия) с `noeviction` и правами на Lua и команды
+скриптов. Для переданного извне клиента отключите автоматический повтор команд, исход
+которых может остаться неизвестным после таймаута.
+[Lua-скрипты Redis](https://redis.io/docs/latest/develop/programmability/eval-intro/)
 
 Все применимые правила проверяются и списываются атомарно. При отказе не списывается
 ни одно. `triggered_rules` следует порядку конфигурации; `retry_after` — максимальное
 ожидание среди блокирующих правил. Ошибка HTTP не возвращает уже списанную попытку.
 Reject возвращает отказ; wait асинхронно ждёт и проверяет заново, не резервируя
 вместимость во время сна. Отмена распространяется; уже принятые попытки учитываются.
-Ошибка backend вызывает `RateLimitBackendError` (наследник `RateLimitError`), без
-отправки и fallback. Outgoing middleware записывает cooldown из `TelegramRetryAfter`
-и повторно выбрасывает ошибку; HTTP retries принадлежат очереди или прямому вызывающему
-коду. Вложенного retry loop нет. Настройки не гарантируют соблюдение квот Telegram.
+При сбое проверки backend выбрасывает `RateLimitBackendError` до отправки запроса.
+Получив `TelegramRetryAfter`, outgoing middleware приостанавливает запросы всего бота,
+поскольку Telegram сообщает длительность без указания области действия. Middleware
+передаёт исходную ошибку вызывающему коду, который решает, повторять ли запрос.
+При сбое записи паузы возникает `RateLimitBackendError`. Во время паузы в отказе
+указывается `telegram_retry_after` после имён сработавших правил. Передайте
+`events=EventDispatcher(...)`, чтобы получать `LimitExceededEvent` и `BackendErrorEvent`.
+
+Для проверки с реальным сервером задайте `AIEXT_TEST_REDIS_URL` с адресом
+изолированного Redis и выполните `uv run --locked pytest tests/integration/rate_limit`.
+Учётной записи Redis для тестов нужны права создавать и удалять временного
+пользователя ACL. Без переменной тесты с сервером пропускаются. Middleware
+проверяется с подставным транспортом Telegram.
 
 ### Решения по очереди
 

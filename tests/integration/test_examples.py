@@ -40,6 +40,11 @@ import pytest
             id="pagination-navigation",
         ),
         pytest.param(
+            "rate_limit.py",
+            ("First update: True", "Blocked by: activity", "Another user: True"),
+            id="rate-limit",
+        ),
+        pytest.param(
             "redis_lifecycle.py",
             (
                 "Owned client: True",
