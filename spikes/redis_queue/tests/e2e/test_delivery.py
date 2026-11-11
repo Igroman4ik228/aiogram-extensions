@@ -24,6 +24,7 @@ from payload import encode
 
 async def test_producer_worker_and_http_delivery(harness: Harness, api: API) -> None:
     await harness.producer(wire=encode(SendMessage(chat_id=42, text="hello")), job="hello")
+
     assert await harness.values("opened") == []
 
     await harness.worker()
@@ -42,7 +43,7 @@ async def test_required_methods_and_media_references(
 ) -> None:
     path = tmp_path / "media.bin"
     path.write_bytes(b"shared-file-contents")
-    await harness.worker()
+
     methods: list[TelegramMethod[Any]] = [
         SendMessage(chat_id=42, text="text"),
         SendLocation(chat_id=42, latitude=55.75, longitude=37.62),
@@ -64,8 +65,9 @@ async def test_required_methods_and_media_references(
                 ),
             ]
         )
+    task = "durable_enqueue" if harness.env.get("SPIKE_DURABLE") == "1" else "deliver"
+    await harness.worker()
     for index, method in enumerate(methods):
-        task = "durable_enqueue" if harness.env.get("SPIKE_DURABLE") == "1" else "deliver"
         await harness.producer(task, wire=encode(method), job=str(index))
         await harness.completed(str(index))
 
@@ -77,6 +79,7 @@ async def test_required_methods_and_media_references(
     ]
     assert api.calls[1]["fields"]["latitude"] == "55.75"
     assert api.calls[2]["fields"]["first_name"] == "Test"
+
     for start, expected in ((3, "test-file-id"), (8, "https://example.invalid/media")):
         for offset, field in enumerate(("photo", "document", "video", "audio")):
             assert api.calls[start + offset]["fields"][field] == expected
@@ -86,6 +89,7 @@ async def test_required_methods_and_media_references(
         ]
     for call in api.calls[13:]:
         assert b"shared-file-contents" in call["fields"].values()
+
     assert await harness.pending() == 0
 
 
@@ -115,6 +119,7 @@ async def test_hard_kill_delivery_and_idle_recovery(
     await harness.kill(worker)
     calls_before_restart = len(api.calls)
     assert await harness.pending() == 1
+
     if api.hold is not None:
         api.hold.set()
         api.hold = None
@@ -129,6 +134,7 @@ async def test_hard_kill_delivery_and_idle_recovery(
         await harness.producer(wire=encode(SendMessage(chat_id=42, text="trigger")), job="trigger")
         await harness.completed("trigger")
     await harness.completed("crash")
+
     assert sum(call["fields"].get("text") == "crash" for call in api.calls) == deliveries
     assert await harness.pending() == 0
 
@@ -174,8 +180,10 @@ async def test_task_below_idle_threshold_is_not_claimed_by_another_worker(
 
     assert len(await harness.values("owners:bounded")) == 1
     assert [call["fields"]["text"] for call in api.calls] == ["trigger"]
+
     await harness.release("bounded", "before")
     await harness.completed("bounded")
+
     assert [call["fields"]["text"] for call in api.calls] == ["trigger", "bounded"]
     assert await harness.pending() == 0
 
@@ -196,12 +204,19 @@ async def test_transient_retry_and_retry_after(harness: Harness, api: API, failu
     assert await harness.client.xlen(f"{harness.prefix}:dlq") == 0
 
 
-@pytest.mark.parametrize(("failures", "attempts"), [([400], 1), ([500, 500, 500], 3)])
+@pytest.mark.parametrize(
+    ("failures", "attempts", "error"),
+    [
+        pytest.param([400], 1, "TelegramBadRequest", id="permanent-error"),
+        pytest.param([500, 500, 500], 3, "TelegramServerError", id="retry-budget-exhausted"),
+    ],
+)
 async def test_terminal_failure_dlq_and_explicit_replay(
     harness: Harness,
     api: API,
     failures: list[int],
     attempts: int,
+    error: str,
 ) -> None:
     api.failures = failures.copy()
     await harness.worker()
@@ -211,10 +226,11 @@ async def test_terminal_failure_dlq_and_explicit_replay(
         return await harness.client.xrange(f"{harness.prefix}:dlq")
 
     entries = await until(dead_letter)
+
     entry_id, fields = entries[0]
     assert len(api.calls) == attempts
     assert fields["attempts"] == str(attempts)
-    assert fields["error"] == ("TelegramBadRequest" if attempts == 1 else "TelegramServerError")
+    assert fields["error"] == error
 
     async def acknowledged() -> bool:
         return await harness.pending() == 0
@@ -225,6 +241,7 @@ async def test_terminal_failure_dlq_and_explicit_replay(
     await harness.producer(wire=json.loads(fields["wire"]), job="replay")
     await harness.completed("replay")
     await harness.client.xdel(f"{harness.prefix}:dlq", entry_id)
+
     assert len(api.calls) == attempts + 1
     assert await harness.client.xlen(f"{harness.prefix}:dlq") == 0
 
@@ -240,6 +257,7 @@ async def test_failed_dlq_write_keeps_original_pending(harness: Harness, api: AP
 
     await until(called)
     await asyncio.sleep(0.2)
+
     assert await harness.pending() == 1
     assert await harness.values("completed") == []
 
@@ -253,6 +271,7 @@ async def test_stock_retry_is_immediate_and_has_no_dlq(harness: Harness, api: AP
         return len(api.calls) >= 3 and await harness.pending() == 0
 
     await until(exhausted)
+
     assert len(api.calls) == 3
     assert api.calls[-1]["time"] - api.calls[0]["time"] < 1
     assert await harness.client.xlen(f"{harness.prefix}:dlq") == 0

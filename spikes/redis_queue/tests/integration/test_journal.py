@@ -22,7 +22,9 @@ async def test_enqueue_deduplicates_one_logical_job(journal: DeliveryJournal) ->
     assert first is True
     assert second is False
     assert generation == duplicate_generation
+
     state = await journal.snapshot("one")
+
     assert state["status"] == "queued"
     assert state["attempts"] == "0"
 
@@ -68,7 +70,9 @@ async def test_attempt_budget_and_dead_letter_are_durable_and_idempotent(
 
     assert first == second
     assert await journal.client.xlen(f"{journal.prefix}:durable-dlq") == 1
+
     state = await journal.snapshot("one")
+
     assert state["status"] == "dead"
     assert state["attempts"] == "3"
 
@@ -85,7 +89,9 @@ async def test_concurrent_replay_creates_one_new_generation(journal: DeliveryJou
     assert first[0] + second[0] == 1
     assert first[1] == second[1]
     assert first[1] != generation
+
     state = await journal.snapshot("one")
+
     assert state["status"] == "queued"
     assert state["attempts"] == "0"
     assert await journal.client.zcard(f"{journal.prefix}:outbox") == 1
@@ -120,7 +126,9 @@ async def test_retention_cleanup_preserves_active_jobs(journal: DeliveryJournal)
     assert await journal.snapshot("dead") == {}
     assert (await journal.snapshot("active"))["status"] == "queued"
     assert await journal.client.xlen(f"{journal.prefix}:durable-dlq") == 0
+
     _, new_generation = await journal.enqueue("dead", wire)
+
     assert new_generation != generation
     assert await journal.claim("dead", generation, "old") == "stale"
 
@@ -129,10 +137,12 @@ async def test_enqueue_rejects_conflicts_and_oversize_before_new_state(
     journal: DeliveryJournal,
 ) -> None:
     _, generation = await journal.enqueue("one", encode(SendMessage(chat_id=42, text="original")))
+
     with pytest.raises(ResponseError, match="Job payload conflict"):
         await journal.enqueue("one", encode(SendMessage(chat_id=42, text="different")))
     with pytest.raises(ValueError, match="262144"):
         await journal.enqueue("large", encode(SendMessage(chat_id=42, text="x" * 262144)))
+
     assert (await journal.snapshot("one"))["generation"] == generation
     assert await journal.snapshot("large") == {}
     assert len(await journal.outbox()) == 1
@@ -145,6 +155,7 @@ async def test_invalid_retention_is_rejected_before_redis_writes(
 ) -> None:
     with pytest.raises(ValueError, match=re.escape(str(retention_ms))):
         DeliveryJournal(journal.client, journal.prefix, retention_ms=retention_ms)
+
     assert await journal.snapshot("one") == {}
 
 

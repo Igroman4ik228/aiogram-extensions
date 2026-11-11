@@ -34,6 +34,7 @@ def test_local_file_is_a_descriptor_not_file_bytes(tmp_path: Path) -> None:
 
 def test_worker_reconstructs_method_and_shared_file(tmp_path: Path) -> None:
     path = tmp_path / "photo.jpg"
+
     restored = decode(
         {
             "version": 1,

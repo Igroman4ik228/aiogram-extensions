@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Self
 from urllib.parse import quote, urlsplit
@@ -17,8 +18,10 @@ from aiogram_extensions._validation import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
     from types import TracebackType
 
+    from aiogram import Dispatcher
     from redis.asyncio import Redis
 
 __all__ = [
@@ -26,6 +29,7 @@ __all__ = [
     "RedisConfig",
     "RedisConnectionManager",
     "RedisLifecycleError",
+    "redis_context",
 ]
 
 
@@ -42,6 +46,7 @@ class RedisConfig:
         seconds("connect_timeout", self.connect_timeout)
         seconds("socket_timeout", self.socket_timeout)
         positive_integer("max_connections", self.max_connections)
+
         require_instance("url", self.url, str)
         try:
             parsed = urlsplit(self.url)
@@ -58,6 +63,7 @@ class RedisConfig:
             )
         except ValueError:
             valid = False
+
         if not valid:
             raise ConfigurationError(
                 "url",
@@ -85,6 +91,7 @@ class RedisConnectionManager:
     def __init__(self, config: RedisConfig | None = None, *, client: Redis | None = None) -> None:
         self.config = config if config is not None else RedisConfig()
         require_instance("config", self.config, RedisConfig)
+
         self._client = client
         self._owns_client = client is None
         self._started = False
@@ -105,6 +112,7 @@ class RedisConnectionManager:
         async with self._lock:
             if self._closed:
                 raise RedisLifecycleError
+
             if self._client is None:
                 try:
                     from redis.asyncio import Redis  # noqa: PLC0415 -- Optional dependency.
@@ -114,6 +122,7 @@ class RedisConnectionManager:
                     if exc.name is None or exc.name.split(".")[0] != "redis":
                         raise
                     raise MissingRedisExtraError from None
+
                 # redis-py leaves the public factory's **kwargs unannotated.
                 self._client = Redis.from_url(  # pyright: ignore[reportUnknownMemberType]
                     self.config.url,
@@ -123,13 +132,16 @@ class RedisConnectionManager:
                     max_connections=self.config.max_connections,
                     retry=Retry(NoBackoff(), 0),
                 )
+
             self._started = True
+
         return self
 
     async def aclose(self) -> None:
         async with self._lock:
             if self._closed:
                 return
+
             if self._owns_client and self._client is not None:
                 await self._client.aclose()
             self._closed = True
@@ -140,6 +152,7 @@ class RedisConnectionManager:
             raise ConfigurationError("parts", "must be non-empty")
         for part in parts:
             nonempty_string("parts", part)
+
         return ":".join((self.config.prefix, namespace, *(quote(part, safe="") for part in parts)))
 
     async def __aenter__(self) -> Self:
@@ -152,3 +165,26 @@ class RedisConnectionManager:
         traceback: TracebackType | None,
     ) -> None:
         await self.aclose()
+
+
+@asynccontextmanager
+async def redis_context(
+    dispatcher: Dispatcher,
+    config: RedisConfig | None = None,
+    *,
+    client: Redis | None = None,
+    key: str = "redis",
+) -> AsyncGenerator[RedisConnectionManager, None]:
+    """Expose a Redis client through aiogram DI for the lifetime of the context."""
+    nonempty_string("key", key)
+    if key in dispatcher.workflow_data:
+        raise ConfigurationError("key", "is already registered on the dispatcher")
+
+    async with RedisConnectionManager(config, client=client) as manager:
+        active_client = manager.client
+        dispatcher[key] = active_client
+        try:
+            yield manager
+        finally:
+            if dispatcher.get(key) is active_client:
+                del dispatcher[key]

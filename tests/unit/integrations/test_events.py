@@ -43,6 +43,7 @@ async def test_callbacks_receive_the_event_in_registration_order(event: Event) -
         seen.append(("second", event))
 
     await EventDispatcher((first, second)).emit(event)
+
     assert seen == [("first", event), ("second", event)]
 
 
@@ -59,6 +60,7 @@ async def test_callback_failure_is_logged_safely_and_remaining_callbacks_run(
         seen.append(event)
 
     event = TaskEvent(kind="task_completed", task_id="private-id", generation="gen-1")
+
     await EventDispatcher((broken, observe)).emit(event)
 
     assert seen == [event]
@@ -78,6 +80,8 @@ async def test_cancellation_propagates_and_stops_dispatch() -> None:
         seen.append(event)
 
     event = TaskEvent(kind="task_started", task_id="job-1", generation="gen-1")
+
     with pytest.raises(asyncio.CancelledError):
         await EventDispatcher((cancel, observe)).emit(event)
+
     assert seen == []

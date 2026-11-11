@@ -14,7 +14,9 @@ async def test_idle_worker_recovers_after_hard_kill(harness: Harness, api: API) 
     worker = await harness.worker(idle_ms=200)
     await harness.stage("recover", "before")
     await harness.kill(worker)
+
     assert await harness.pending() == 1
+
     await harness.release("recover", "before")
 
     await harness.worker(idle_ms=200)
@@ -36,7 +38,9 @@ async def test_idle_recovery_drains_multiple_reclaim_batches(harness: Harness, a
     for job in jobs:
         await harness.stage(job, "before")
     await harness.kill(worker)
+
     assert await harness.pending() == 5
+
     for job in jobs:
         await harness.release(job, "before")
 

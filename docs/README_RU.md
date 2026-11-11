@@ -5,9 +5,9 @@
 Модульные расширения и утилиты для aiogram 3. В планах — ограничение частоты
 запросов, очереди сообщений, пагинация и инструменты наблюдаемости.
 
-**В разработке:** доступны конфигурации с валидацией, типы результатов, callbacks
-и Redis connection manager. Пагинация, алгоритмы limiter, middleware и workers
-очереди пока не реализованы.
+**В разработке:** доступны ядро пагинации и aiogram-навигация, конфигурации с
+валидацией, типы результатов, callbacks и Redis connection manager. Алгоритмы
+limiter, middleware и workers очереди пока не реализованы.
 
 ## Начало работы
 
@@ -36,6 +36,8 @@ uv run --locked examples/package_info.py
 uv run --locked examples/bot_lifecycle.py
 uv run --locked examples/contracts.py
 uv run --locked examples/redis_lifecycle.py
+uv run --locked examples/pagination_core.py
+uv run --locked examples/pagination_bot.py
 ```
 
 - [Информация о пакете](../examples/package_info.py): импорт пакета, проверка его
@@ -46,13 +48,161 @@ uv run --locked examples/redis_lifecycle.py
 
 - [Контракты и callbacks](../examples/contracts.py): конфигурации и явно
   отправленное событие, без запуска limiter или очереди.
-- [Владение Redis](../examples/redis_lifecycle.py): создание/закрытие клиента
-  и построение ключа; нужен redis-py, но сервер Redis не требуется.
+- [Redis в обработчике](../examples/redis_lifecycle.py): локальный апдейт `/redis`,
+  получение клиента через DI aiogram и построение ключа с префиксом. Нужен redis-py.
 
-Все четыре примера работают без учётных данных, сети и внешних сервисов.
+- [Ядро пагинации](../examples/pagination_core.py): страницы упорядоченной коллекции,
+  асинхронный cursor-адаптер и ограниченные превью обычного текста.
+- [Бот с пагинацией](../examples/pagination_bot.py): просмотр страниц без сети и
+  готовый роутер `/catalog` с кнопками и форматированным заголовком.
+  Для polling задайте переменную окружения `BOT_TOKEN` и выполните
+  `uv run --locked examples/pagination_bot.py --live`.
+  Режим `--live` требует настоящего токена бота и доступа к Telegram.
+
+Все шесть примеров в режиме по умолчанию работают без учётных данных, сети и внешних сервисов.
 Примеры limiter и очереди появятся вместе с реализациями.
 Примеры проходят линтер, проверку типов и
 [тестирование в отдельных процессах](../tests/integration/test_examples.py).
+
+## Пагинация и utilities
+
+Импорт ядра (`aiogram_extensions.pagination` или `.pagination.core`) не загружает
+aiogram и Redis. Telegram UI импортируется отдельно из `.pagination.aiogram`.
+
+### Текстовые списки в aiogram
+
+```python
+from aiogram import Router
+from aiogram.filters import Command
+from aiogram.types import Message
+
+from aiogram_extensions.pagination import CursorPage, Page, Paginator
+from aiogram_extensions.pagination.aiogram import NavigationConfig, TextPagination
+
+router = Router()
+
+
+def render(page: Page[str] | CursorPage[str]) -> str:
+    return "\n".join(page.items) or "Каталог пуст."
+
+
+catalog = TextPagination(
+    Paginator(["Apple", "Banana", "Cherry"], page_size=2),
+    render=render,
+    config=NavigationConfig(prefix="catalog", current_text="{page}/{pages}"),
+)
+router.include_router(catalog.router)
+
+
+@router.message(Command("catalog"))
+async def show_catalog(message: Message) -> None:
+    if message.from_user is not None:
+        await catalog.answer(message)
+```
+
+Подключите `router` к диспетчеру. `answer(message)` возвращает отправленный
+`Message` с первой страницей и кнопками. Подключённый роутер отвечает на нажатия,
+обновляет исходное сообщение и очищает ссылки при остановке. Листать страницы
+может только пользователь, открывший список. Используйте отдельный prefix для
+каждого списка. Если в родительском роутере есть обработчик всех callback,
+добавьте ему фильтр, чтобы нажатия доходили до роутера пагинации.
+
+`TextPagination` принимает оба вида paginator. Функция отображения возвращает
+строку или `Text` из aiogram для форматирования, как в [примере бота](../examples/pagination_bot.py).
+Ссылки хранятся в текущем процессе с описанными ниже TTL и лимитом. Для
+нестандартного интерфейса, например подписей к фото или сообщений inline-режима,
+используйте `Navigation` напрямую.
+
+### Упорядоченные источники и типизированные страницы
+
+`Paginator(source, *, page_size=10)` принимает Python `Sequence` или асинхронный
+`OffsetSource`. Коллекции используют `SequenceSource`: поверхностный снимок tuple
+в исходном порядке; последующие вставки/удаления в коллекции на него не влияют.
+Сами объекты элементов не копируются. Текст и bytes как коллекции отклоняются.
+
+`await paginator.page(number=1)` использует нумерацию с единицы и offset
+`(number - 1) * page_size`. Поля неизменяемого `Page`: tuple `items`, `number`, `limit`
+и `total`; свойства — `offset`, `total_pages`, `previous_page`, `next_page`.
+Пустой источник имеет страницу 1 из 1 без навигации. Положительные целые размеры
+и номера страниц не принимают bool/дроби; выход за конец вызывает `PageOutOfRangeError`.
+
+Для своего offset-источника реализуйте
+`async fetch(*, offset: int, limit: int) -> OffsetResult[T]`.
+Возвращайте `OffsetResult(items=tuple(...), total=...)` с неотрицательным целым total
+и точным запрошенным срезом, включая укороченную последнюю страницу.
+`SequenceSource.fetch` также поддерживает прямые произвольные неотрицательные
+offset и положительные limit. Каждый запрос paginator читает источник заново.
+Адаптер обеспечивает детерминированный порядок с уникальным дополнительным ключом,
+согласованные строки и count в рамках чтения, неблокирующий I/O. Вставки/удаления
+между чтениями могут сдвигать offset-страницы; общего снимка БД между запросами нет.
+Несогласованные результаты вызывают `PaginationError`; валидация входа — `ValueError`.
+
+`CursorPaginator(source, *, page_size=10)` принимает `CursorSource` с методом
+`async fetch(*, cursor: str | None, limit: int) -> CursorResult[T]`. `page(cursor=None)`
+начинает обход. Возвращайте tuple `items` (не больше `limit`), `next_cursor=None`
+и `previous_cursor=None` для отсутствующих направлений либо непустые непрозрачные
+строки для существующих. Для возврата на первую страницу нужен явный start-токен:
+`None` означает отсутствие ссылки previous/next. Неизменяемый `CursorPage` добавляет
+запрошенные `cursor` и `limit`; номер страницы и total не вычисляются. Токены,
+указывающие на текущий не-None cursor, отклоняются. Адаптер отвечает за keyset-порядок,
+проверку/версионирование токенов и консистентность при изменениях; непригодные токены
+отклоняйте через `InvalidCursorError`. Остальные ошибки источника и отмена
+распространяются без изменений. См. [исполняемый адаптер](../examples/pagination_core.py).
+
+### Aiogram-навигация и жизненный цикл callback
+
+`Navigation(paginator, *, config=None, clock=time.monotonic)` поддерживает оба paginator.
+`keyboard(page, *, scope)` возвращает `InlineKeyboardMarkup`, пропуская недоступные
+направления, и заменяет ссылки того же scope. Привязывайте scope к сообщению, а для
+личного управления — к авторизованному пользователю; перед разрешением заново
+вычисляйте его из query.
+
+`NavigationConfig` — неизменяемая dataclass с именованными аргументами:
+`prefix="aep1"` (1–32 ASCII-буквы/цифры/`_.-`), `previous_text="←"`, `next_text="→"`,
+`current_text="{page}"`, `layout=(("previous", "current", "next"),)`, `ttl=300` секунд,
+`max_entries=1000` (не меньше 3 ссылок),
+`stale_text="Navigation expired. Open the list again."`, `invalid_text="Invalid navigation."`.
+Подписи должны быть непустыми. Layout содержит каждое действие ровно один раз
+в непустых рядах. Текущая подпись поддерживает Python format-поля `page`, `pages`,
+`total`, `count`; cursor-страницы подставляют `"•"`, `"?"`, `"?"` в первые три.
+Для cursor-пагинации используйте форматы, совместимые со строками.
+
+Кнопки содержат только prefix и случайную ASCII-ссылку длиной 24 символа (не более
+57 UTF-8 байт), соблюдая [ограничение Telegram в 1–64 байта](https://core.telegram.org/bots/api#inlinekeyboardbutton).
+Курсоры остаются в памяти, включая длинные и Unicode-токены. Ссылки истекают на
+границе TTL; просроченные записи удаляются при обращении, самые старые вытесняются
+при заполнении. `clear(scope=...)` сбрасывает один scope, `clear()` — все.
+Состояние локально для экземпляра `Navigation` и теряется после рестарта.
+Направляйте callbacks в тот же экземпляр; общего хранилища между процессами нет.
+Используйте отдельный prefix для каждого `Navigation` в одном дереве роутеров.
+
+`await navigation.resolve(data, *, scope)` возвращает страницу или `None` для
+индикатора текущей. Некорректные данные вызывают `InvalidNavigationError`;
+отсутствующие, просроченные, заменённые ссылки, чужой scope и удалённые страницы/
+отклонённые курсоры — `StaleNavigationError`. После чтения источника ссылка
+проверяется повторно. Оба исключения наследуют `PaginationError`/`ValueError`.
+Telegram-запросы не выполняются. `matches(query)` — фильтр роутера по заданному prefix.
+`await handle(query, *, scope, render)` возвращает `False` для чужих prefix; свои
+query получают ответ и `True`. Невалидные/устаревшие query получают настроенный текст;
+индикатор только подтверждается. При валидном переходе после подтверждения вызывается
+асинхронный `render(query, page, markup)`; приложение редактирует сообщение и учитывает
+различия доступных/inline-сообщений. Ошибки источника, Telegram, render и отмена
+распространяются. Конкурентные обновления одного scope сериализуйте в приложении.
+При ошибке редактирования создайте клавиатуру заново: сброшенные ссылки не
+восстанавливаются. Фоновые задачи очистки и соединения не создаются.
+
+### Превью обычного текста
+
+`aiogram_extensions.utilities.truncate_text(text, *, max_units, suffix="…")` укладывает
+обычный текст с маркером усечения в бюджет кодовых единиц UTF-16. В отличие от среза
+Python, символы вне BMP учитываются как две единицы; кодовые точки не разрываются.
+Примеры пагинации ограничивают им превью строк каталога. Суффикс должен помещаться,
+даже если текст не нужно усекать; неверный бюджет вызывает `ValueError`.
+Вход должен быть валидным Unicode. Графемные кластеры, HTML/Markdown и готовые
+entities не сохраняются: усечение выполняется до экранирования/создания entities.
+Это консервативный бюджет текста, а не автоматическая проверка лимитов каждого
+Telegram-метода. Для форматирования используйте инструменты aiogram; helper их
+не заменяет. См. [смещения Telegram entities](https://core.telegram.org/bots/api#messageentity).
 
 ## Контракты этапа 2
 
@@ -171,6 +321,40 @@ DLQ хранит task/generation, payload, категорию причины и 
 
 ### Жизненный цикл Redis и события
 
+Оберните polling в `redis_context`, чтобы клиент Redis был доступен обработчикам
+aiogram на время работы приложения.
+
+```python
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command
+from aiogram.types import Message
+from redis.asyncio import Redis
+
+from aiogram_extensions.redis import RedisConfig, redis_context
+
+dispatcher = Dispatcher()
+
+
+@dispatcher.message(Command("redis"))
+async def redis_status(message: Message, redis: Redis) -> None:
+    await redis.ping()
+    await message.answer("Redis доступен.")
+
+
+async def run(bot: Bot, redis_url: str) -> None:
+    async with redis_context(dispatcher, RedisConfig(url=redis_url)):
+        await dispatcher.start_polling(bot, handle_as_tasks=False)
+```
+
+Для запуска команды установите extra `redis` и укажите доступный сервер Redis.
+`redis_context` добавляет клиент в данные диспетчера под именем `redis` и удаляет
+его при выходе, в том числе после ошибки. Для другого имени передайте
+`key="cache"` и назовите параметр обработчика `cache`. Ключ должен быть свободен
+в данных диспетчера. Через `client=...` можно передать существующий клиент, а через
+`as manager` получить доступ к `manager.key(...)` для построения ключей с префиксом.
+[Офлайн-пример](../examples/redis_lifecycle.py) показывает инъекцию на локальном
+апдейте. [Документация DI aiogram](https://docs.aiogram.dev/en/3.31.0/dispatcher/dependency_injection.html)
+
 `RedisConnectionManager(config=None, *, client=None)` заимствует клиент или создаёт
 его лениво. Используйте `async with manager` либо `await manager.start()` и
 `await manager.aclose()`. Start идемпотентен, не выполняет сетевой I/O и health check;
@@ -280,11 +464,17 @@ tests/
 ├── unit/
 │   ├── integrations/test_events.py
 │   ├── messaging/test_contracts.py
+│   ├── pagination/test_core.py
 │   ├── rate_limit/test_contracts.py
+│   ├── utilities/test_text.py
 │   └── test_redis.py
 └── integration/
+    ├── pagination/
+    │   ├── test_bot_example.py
+    │   └── test_navigation.py
     ├── test_examples.py
     ├── test_imports.py
+    ├── test_redis_context.py
     └── test_packaging.py
 ```
 

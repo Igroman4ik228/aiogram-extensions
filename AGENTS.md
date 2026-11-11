@@ -1,36 +1,100 @@
-# AI AGENT INSTRUCTIONS
-Read and strictly adhere.
+
+# AI Agent Instructions
 
 ## Maintaining This File
-1. Must be written entirely in clear, high-quality English.
-2. Keep instructions brief, elegant, and directly actionable. Add verified project-specific rules and non-obvious constraints in scoped instructions; avoid duplicating discoverable documentation.
-3. Must not exceed 100 lines. If this file exceeds 6000 characters (checked when editing AGENTS.md), ask the user if they want to compress it without losing any meaning or details.
-4. Propose `AGENTS.md` updates if users repeatedly ask for specific behaviors.
+- Write instructions in clear, concise English.
+- Keep this file under 100 lines and 6000 characters. Consolidate
+  duplication before expanding it; ask before removing requirements.
+- Put non-obvious, project-specific rules in the nearest applicable
+  AGENTS.md. Do not duplicate discoverable documentation.
+- Suggest updates for recurring user preferences; do not edit
+  AGENTS.md unless requested.
 
 ## Agent Behavior
-- Strict Adherence: Follow prompts exactly. Do not invent tasks or behavior. Ask clarifying questions only when ambiguity materially affects correctness, compatibility, or safety. Otherwise, use reasonable assumptions consistent with the codebase.
-- Verify & Thoroughness: Verify facts in code, double-check affected code, and do not leave work incomplete. When renaming or removing symbols, check affected references using available search tools. Remove obsolete code introduced or superseded by the change.
-- User Edits: Do not discard user changes, rewrite Git history, push, deploy, publish, or perform irreversible data operations without authorization.
-- Complete Refactoring & Dead Code Removal: Remove superseded code within the affected scope, unless it is required for compatibility, migration, or an explicitly supported use case.
-- Explicit Change Scope: Implement the requested outcome and its necessary supporting changes. Avoid unrelated features, refactoring, and cleanup. Ask before implementing proposed changes. Answer questions without modifying code; never infer implementation permission from an explanatory question.
-- Avoid Premature Abstraction: Keep one-off code local unless extraction is justified by reuse, correctness, maintainability, or an explicit user requirement.
-- Documentation: Keep project documentation in `docs/README.md` (English) and `docs/README_RU.md` (Russian), with matching content and reciprocal translation links. Write concise, reader-facing documentation. Leave the temporary `docs/TZ.md` and `docs/ROADMAP.md` unchanged unless explicitly requested.
-- New Libraries: Before adding a library, explain its purpose and why it was chosen, and obtain user approval.
+- Follow the user's request and established project conventions.
+  Ask questions only when ambiguity materially affects correctness,
+  compatibility, or safety; otherwise make reasonable assumptions.
+- Answer questions and perform reviews without modifying files
+  unless implementation was requested.
+- Complete the requested task and necessary supporting changes.
+  Avoid unrelated features, refactoring, and cleanup.
+- Preserve user changes. Never rewrite Git history, push, deploy,
+  publish, or perform destructive operations without authorization.
+- Remove obsolete code within the affected scope after checking
+  references. Preserve required compatibility and migration paths.
+- Before adding third-party dependencies, explain the rationale
+  and obtain approval.
+- Verify version-sensitive behavior against installed APIs and
+  official documentation when needed.
+- Never expose secrets in source code, logs, tests, or output.
+
+## Code Quality
+- Keep `__init__.py` files limited to a package docstring, public
+  re-exports, and `__all__`. Put implementation in focused modules.
+- Separate distinct steps and loosely related groups of statements
+  with a blank line. Keep tightly related statements together.
+- Write simple, idiomatic, readable, maintainable Python.
+- Follow existing conventions before introducing new patterns.
+- Prefer direct solutions over speculative flexibility, layers,
+  wrappers, configuration, and premature optimization.
+- Introduce abstractions only for concrete benefits in clarity,
+  reuse, testability, or architectural boundaries.
+- Keep one-off logic local unless extraction improves the design.
+- Prefer explicit control flow and descriptive naming.
+- Write comments explaining non-obvious reasoning or constraints,
+  not behavior already evident from the code.
+- Validate untrusted inputs and handle realistic failures.
+  Avoid redundant checks and unnecessary fallback paths.
+- Do not silently suppress unexpected exceptions.
+- In async code, avoid blocking the event loop and leaking tasks
+  or resources; use appropriate cancellation and cleanup.
+- Preserve public contracts and existing behavior unless changes
+  are requested.
 
 ## TDD and Tests
-- For features and bug fixes, work in small red-green-refactor cycles: write one behavior test, run it and confirm the intended failure, implement the minimum change, then refactor with tests green. Record the commands and outcomes; a collection or environment error is not a valid red step.
-- Test public behavior at established boundaries. Clarify new boundaries only when ambiguity affects the contract. Use independent expected results, relevant edge cases, and regression tests; avoid tests coupled to private implementation.
-- Use pytest and pytest-asyncio as configured in `pyproject.toml`. Group tests by level (`unit`, `integration`, `e2e`), then by feature as needed; create directories when tests exist. Use `test_*.py` files, descriptive `test_<behavior>` names and typed functions. Async tests and fixtures use auto mode.
-- Keep fixtures local until shared; put shared fixtures in the nearest `conftest.py`. Prefer function scope, context managers or yield cleanup, built-in fixtures, and parametrization for equivalent cases. Mock external boundaries rather than internal collaborators; keep default tests independent of credentials and external services.
-- For documentation or tooling changes without runtime behavior, use the relevant checks instead of artificial failing tests. Document any reason a red step cannot be reproduced.
-- Keep runnable examples of implemented public features in `examples/`, with uv commands in both READMEs. Verify offline examples as subprocesses; document credentials and services required by any live example.
+- For features and bug fixes, use focused red-green-refactor cycles
+  when practical. Confirm intended failures before fixing them;
+  collection or environment errors do not count as valid red steps.
+- Test observable behavior at established boundaries, including
+  meaningful edge cases and regressions. Use independent expected
+  results rather than reproducing implementation logic.
+- Name the behavior under test and separate setup, action, and
+  assertions with blank lines. Give parameterized cases explicit
+  expectations and use fixtures for shared setup only.
+- Use pytest and pytest-asyncio as configured in pyproject.toml.
+  Async tests and fixtures use auto mode.
+- Organize tests by level (unit, integration, e2e), then feature
+  when useful. Use test_*.py files, descriptive test_* functions,
+  and type annotations.
+- Keep fixtures local until reuse justifies sharing them in the
+  nearest conftest.py. Prefer function scope and reliable cleanup.
+- Use parametrization for equivalent cases. Mock external
+  boundaries; avoid implementation-coupled mocks.
+- Keep default tests deterministic and independent of credentials
+  and live external services.
+- For changes without runtime behavior, use relevant checks
+  instead of artificial failing tests.
 
-## Mandatory Workflow
-Apply this workflow after every logical change to code or files that affect its behavior, dependencies, checks, or packaging. Repeat affected checks after further edits.
-
-1. Inspect the diff and affected references. Confirm the requested behavior and preserve existing user changes.
-2. Update relevant tests when behavior changes. Keep both README translations consistent with the implementation and validate their links and commands. For documentation-only changes, check content and links; run packaging checks if the package README changes.
-3. When dependencies change, regenerate `uv.lock` with `uv lock` and synchronize the environment with `uv sync --locked`. Otherwise, preserve the lockfile and use `--locked` for checks.
-4. Run `uv run --locked ruff check .`, `uv run --locked ruff format --check .`, `uv run --locked pyright`, and `uv run --locked pytest`. Correct issues introduced by the change without weakening checks; distinguish unrelated existing failures.
-5. When packaging, metadata, dependencies, or the package README change, run `uv build` and inspect the resulting wheel and source archive for the affected metadata and files. Verify installation in a clean environment when installation behavior changes.
-6. Review the final diff, run `git diff --check`, and ensure the patch contains only intended changes. Report the result, checks actually run, and any failures or unverified behavior; claim completion only when the evidence supports it.
+## Documentation and Examples
+- Maintain docs/README.md (English) and docs/README_RU.md (Russian).
+  Keep them equivalent, with reciprocal translation links.
+- Update both READMEs when public behavior, APIs, or commands change.
+  Keep documentation concise, accurate, and reader-facing.
+- Do not modify docs/TZ.md or docs/ROADMAP.md unless requested.
+- Maintain runnable public-feature examples in examples/ with
+  documented uv commands in both READMEs.
+- Verify affected offline examples as subprocesses. Document
+  credentials or services required for live examples.
+  
+## Verification Workflow
+1. During development, run focused tests and relevant checks. Repeat affected checks after edits; avoid unnecessary full runs.
+2. When dependencies change, run `uv lock` and `uv sync --locked`. Otherwise, preserve `uv.lock`.
+3. Before completion, run the following checks:
+   - `uv run --locked ruff check --fix .`
+   - `uv run --locked ruff format .`
+   - `uv run --locked pyright`
+   - `uv run --locked pytest`
+   Fix remaining issues introduced by the change without weakening checks or modifying unrelated code. Distinguish pre-existing failures.
+4. For changes to packaging, metadata, dependencies, or the package README, run `uv build` and inspect the wheel and sdist. Verify clean installation when installation behavior changes.
+5. Review the final diff and affected references; run `git diff --check`. Ensure only intended changes remain.
+6. Report changes, checks performed, failures, and unverified behavior. Never claim unperformed checks passed.

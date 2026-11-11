@@ -6,24 +6,32 @@ from textwrap import dedent
 
 
 def test_base_import_is_independent() -> None:
-    subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            "-c",
-            (
-                "import sys, logging; "
-                "root = logging.getLogger(); handlers = root.handlers[:]; level = root.level; "
-                "import aiogram_extensions; "
-                "import aiogram_extensions.rate_limit; "
-                "import aiogram_extensions.messaging; "
-                "import aiogram_extensions.integrations; "
-                "import aiogram_extensions.redis; "
-                "assert not {'aiogram', 'redis', 'taskiq', 'taskiq_redis'} & sys.modules.keys(); "
-                "assert root.handlers == handlers and root.level == level"
-            ),
-        ],
-        check=True,
+    script = dedent(
+        """
+        import logging
+        import sys
+
+        root = logging.getLogger()
+        handlers = root.handlers[:]
+        level = root.level
+
+        import aiogram_extensions
+        import aiogram_extensions.integrations
+        import aiogram_extensions.messaging
+        import aiogram_extensions.pagination.core
+        import aiogram_extensions.rate_limit
+        import aiogram_extensions.redis
+        import aiogram_extensions.utilities
+
+        external_modules = {"aiogram", "redis", "taskiq", "taskiq_redis"}
+        assert external_modules.isdisjoint(sys.modules)
+        assert root.handlers == handlers
+        assert root.level == level
+        """
+    )
+
+    subprocess.run(  # noqa: S603 -- Fixed Python program, no external inputs.
+        [sys.executable, "-I", "-c", script], check=True, timeout=30
     )
 
 

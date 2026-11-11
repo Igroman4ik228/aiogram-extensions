@@ -5,9 +5,9 @@
 Modular extensions and utilities for aiogram 3. Planned features include rate
 limiting, message queues, pagination and observability hooks.
 
-**Under development:** validated configurations and results, typed callbacks and
-a Redis connection manager are available. Pagination, limiter algorithms,
-middleware and queue workers are not implemented yet.
+**Under development:** pagination core and aiogram navigation, validated
+configurations and results, typed callbacks and a Redis connection manager are
+available. Limiter algorithms, middleware and queue workers are not implemented yet.
 
 ## Getting started
 
@@ -36,6 +36,8 @@ uv run --locked examples/package_info.py
 uv run --locked examples/bot_lifecycle.py
 uv run --locked examples/contracts.py
 uv run --locked examples/redis_lifecycle.py
+uv run --locked examples/pagination_core.py
+uv run --locked examples/pagination_bot.py
 ```
 
 - [Package information](../examples/package_info.py): import the package and inspect
@@ -46,12 +48,156 @@ uv run --locked examples/redis_lifecycle.py
 
 - [Contracts and callbacks](../examples/contracts.py): configurations and an
   explicitly emitted event, without running a limiter or queue.
-- [Redis ownership](../examples/redis_lifecycle.py): create/close a client and
-  build a key; requires redis-py but no Redis server.
+- [Redis in a handler](../examples/redis_lifecycle.py): feed a local `/redis` update,
+  get the Redis client through aiogram DI and build a namespaced key. Requires redis-py.
 
-All four examples run without credentials, network access or external services.
+- [Pagination core](../examples/pagination_core.py): ordered collection pages,
+  an asynchronous cursor adapter and bounded plain-text previews.
+- [Pagination bot](../examples/pagination_bot.py): offline page previews and
+  a ready-to-register `/catalog` router with buttons and formatted titles. For
+  live polling, set `BOT_TOKEN` and run `uv run --locked examples/pagination_bot.py --live`.
+  Live mode requires a real bot token and access to Telegram.
+
+All six examples in their default modes run without credentials, network access or external services.
 Limiter and queue examples will accompany their implementations.
 Examples are linted, type-checked and [tested as subprocesses](../tests/integration/test_examples.py).
+
+## Pagination and utilities
+
+Core imports (`aiogram_extensions.pagination` or `.pagination.core`) do not load
+aiogram or Redis. Import Telegram UI separately from `.pagination.aiogram`.
+
+### Text lists in aiogram
+
+```python
+from aiogram import Router
+from aiogram.filters import Command
+from aiogram.types import Message
+
+from aiogram_extensions.pagination import CursorPage, Page, Paginator
+from aiogram_extensions.pagination.aiogram import NavigationConfig, TextPagination
+
+router = Router()
+
+
+def render(page: Page[str] | CursorPage[str]) -> str:
+    return "\n".join(page.items) or "The catalog is empty."
+
+
+catalog = TextPagination(
+    Paginator(["Apple", "Banana", "Cherry"], page_size=2),
+    render=render,
+    config=NavigationConfig(prefix="catalog", current_text="{page}/{pages}"),
+)
+router.include_router(catalog.router)
+
+
+@router.message(Command("catalog"))
+async def show_catalog(message: Message) -> None:
+    if message.from_user is not None:
+        await catalog.answer(message)
+```
+
+Include `router` in the dispatcher. `answer(message)` returns the sent `Message`
+with the first page and buttons. The included router answers button presses,
+updates the original message, and clears callback references on shutdown. Only the
+user who opened the list can turn its pages. Use a distinct callback prefix for
+each list. If a parent router has a catch-all callback handler, filter it so these
+callbacks can reach the pagination router.
+
+`TextPagination` accepts either paginator. The renderer returns a plain string or
+aiogram's `Text` for formatted content, as in the [catalog bot](../examples/pagination_bot.py).
+References live in the current process and follow the TTL and capacity below.
+Use `Navigation` directly for custom UI, such as photo captions or inline-mode messages.
+
+### Ordered sources and typed pages
+
+`Paginator(source, *, page_size=10)` accepts a Python `Sequence` or an async
+`OffsetSource`. Collections use `SequenceSource`: a shallow tuple snapshot in the
+original order; later collection insertions/removals do not change it. Item objects
+are not copied. Text and bytes are rejected as collections.
+
+`await paginator.page(number=1)` uses one-based numbering and offset
+`(number - 1) * page_size`. Frozen `Page` fields are tuple `items`, `number`, `limit`
+and `total`; properties are `offset`, `total_pages`, `previous_page`, `next_page`.
+An empty source has page 1 of 1 with no navigation. Positive integer sizes and page
+numbers reject booleans/fractions; pages beyond the end raise `PageOutOfRangeError`.
+
+Implement `async fetch(*, offset: int, limit: int) -> OffsetResult[T]` for a custom
+offset source. Return `OffsetResult(items=tuple(...), total=...)` with a non-negative
+integer total and exactly the requested slice, including the shorter last page.
+`SequenceSource.fetch` also supports direct arbitrary non-negative offsets and
+positive limits. Each paginator request reads the source again. The adapter must
+provide deterministic ordering (including a unique tie-breaker), consistent rows
+and count within one read, and non-blocking I/O. Inserts/deletes between reads can
+shift offset pages; no cross-request database snapshot is implied. Inconsistent
+source results raise `PaginationError`; input validation raises `ValueError`.
+
+`CursorPaginator(source, *, page_size=10)` accepts a `CursorSource` implementing
+`async fetch(*, cursor: str | None, limit: int) -> CursorResult[T]`. `page(cursor=None)`
+starts traversal. Return tuple `items` (at most `limit`), `next_cursor=None` and
+`previous_cursor=None` for absent directions, or non-empty opaque strings for
+existing ones. To return to the first page, supply an explicit start token: `None`
+means no previous/next link. Frozen `CursorPage` adds the requested `cursor` and
+`limit`; it has no inferred page number or total. Tokens pointing to the current
+non-None cursor are rejected. The adapter owns keyset ordering, token validation,
+versioning and consistency under mutations; reject unusable tokens with
+`InvalidCursorError`. Other source errors and cancellation propagate unchanged.
+See the [executable source adapter](../examples/pagination_core.py).
+
+### Aiogram navigation and callback lifecycle
+
+`Navigation(paginator, *, config=None, clock=time.monotonic)` supports either paginator.
+`keyboard(page, *, scope)` returns `InlineKeyboardMarkup`, omitting unavailable
+directions. It replaces references for the same scope. Use a scope bound to the
+message and, for private controls, the authorized user; recompute it from the query
+before resolution.
+
+`NavigationConfig` is a frozen keyword-only dataclass: `prefix="aep1"` (1–32 ASCII
+letters/digits/`_.-`), `previous_text="←"`, `next_text="→"`, `current_text="{page}"`,
+`layout=(("previous", "current", "next"),)`, `ttl=300` seconds, `max_entries=1000`
+(at least 3 references), `stale_text="Navigation expired. Open the list again."`,
+`invalid_text="Invalid navigation."`. Labels must be non-empty. Layout contains
+each action exactly once across non-empty rows. The current label supports Python
+format fields `page`, `pages`, `total`, `count`; cursor pages use `"•"`, `"?"`, `"?"`
+for the first three. Use string-compatible formats with cursor pagination.
+
+Buttons carry only a prefix and a random 24-character ASCII reference (at most
+57 UTF-8 bytes), within [Telegram's 1–64 byte constraint](https://core.telegram.org/bots/api#inlinekeyboardbutton).
+Cursors stay in memory, including long or Unicode tokens. References expire at
+the TTL boundary; expired entries are removed on access, oldest references are
+evicted at capacity. `clear(scope=...)` invalidates one scope, `clear()` all scopes.
+State is local to the `Navigation` instance and lost on restart. Route callbacks
+to the same instance; shared storage across processes is not provided. Use a
+distinct prefix for each `Navigation` instance registered in the same router tree.
+
+`await navigation.resolve(data, *, scope)` returns a page, or `None` for the current
+indicator. Malformed data raises `InvalidNavigationError`; missing, expired,
+superseded, wrong-scope references and removed pages/rejected cursors raise
+`StaleNavigationError`. References are checked again after reading the source.
+Both errors inherit `PaginationError`/`ValueError`. It performs no
+Telegram requests. `matches(query)` is a router filter for the configured prefix.
+`await handle(query, *, scope, render)` returns `False` for other prefixes; owned
+queries are answered and return `True`. Invalid/stale queries receive configured
+text; the current indicator is only acknowledged. Valid navigation calls async
+`render(query, page, markup)` after acknowledgement; the application edits the
+message and handles accessible/inline message differences. Source, Telegram and
+render errors and cancellation propagate. Serialize concurrent updates per scope
+in the application. If editing fails, rebuild the keyboard; invalidated references
+are not rolled back. No background cleanup task or connections are started.
+
+### Plain-text previews
+
+`aiogram_extensions.utilities.truncate_text(text, *, max_units, suffix="…")` fits
+plain text and a truncation marker in a UTF-16 code-unit budget. Unlike Python
+slicing it accounts for astral characters as two units and preserves whole code
+points. The pagination examples use it to bound catalog row previews. The suffix
+must fit even when the text needs no truncation; invalid budgets raise `ValueError`.
+Input must be valid Unicode. It does not preserve grapheme clusters, HTML/Markdown
+or existing entities: truncate before escaping/constructing entities. This is a
+conservative text budget, not automatic enforcement of every Telegram method's
+limits. For rich formatting use aiogram's own formatting tools; this helper does
+not replace them. See [Telegram entity offsets](https://core.telegram.org/bots/api#messageentity).
 
 ## Stage 2 contracts
 
@@ -171,6 +317,39 @@ duplicate Telegram effects; no exactly-once guarantee is made.
 
 ### Redis lifecycle and events
 
+Wrap polling in `redis_context` to make a Redis client available to aiogram handlers
+for the duration of the application.
+
+```python
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command
+from aiogram.types import Message
+from redis.asyncio import Redis
+
+from aiogram_extensions.redis import RedisConfig, redis_context
+
+dispatcher = Dispatcher()
+
+
+@dispatcher.message(Command("redis"))
+async def redis_status(message: Message, redis: Redis) -> None:
+    await redis.ping()
+    await message.answer("Redis is reachable.")
+
+
+async def run(bot: Bot, redis_url: str) -> None:
+    async with redis_context(dispatcher, RedisConfig(url=redis_url)):
+        await dispatcher.start_polling(bot, handle_as_tasks=False)
+```
+
+Install the `redis` extra and provide a reachable Redis server to run this command.
+`redis_context` puts the client into dispatcher data under `redis` and removes it on
+exit, including after an error. Use `key="cache"` and a handler parameter named
+`cache` for a different name. The key must be free in dispatcher data. Pass
+`client=...` to borrow an existing connection. Use `as manager` to build namespaced
+keys via `manager.key(...)`. The [offline example](../examples/redis_lifecycle.py)
+demonstrates injection with a local update. [Aiogram DI documentation](https://docs.aiogram.dev/en/3.31.0/dispatcher/dependency_injection.html)
+
 `RedisConnectionManager(config=None, *, client=None)` borrows a client or creates
 one lazily. Use `async with manager`, or `await manager.start()` and
 `await manager.aclose()`. Start is idempotent, with no network I/O or health check;
@@ -275,11 +454,17 @@ tests/
 ├── unit/
 │   ├── integrations/test_events.py
 │   ├── messaging/test_contracts.py
+│   ├── pagination/test_core.py
 │   ├── rate_limit/test_contracts.py
+│   ├── utilities/test_text.py
 │   └── test_redis.py
 └── integration/
+    ├── pagination/
+    │   ├── test_bot_example.py
+    │   └── test_navigation.py
     ├── test_examples.py
     ├── test_imports.py
+    ├── test_redis_context.py
     └── test_packaging.py
 ```
 

@@ -24,6 +24,7 @@ def test_rebuild_is_deterministic_and_preserves_unpatched_files() -> None:
 
     assert first == second
     assert first == (ROOT / "artifacts" / FILENAME).read_bytes()
+
     with (
         zipfile.ZipFile(io.BytesIO(first)) as wheel,
         zipfile.ZipFile(io.BytesIO(upstream)) as original,
@@ -39,10 +40,12 @@ def test_rebuild_is_deterministic_and_preserves_unpatched_files() -> None:
 def test_committed_wheel_has_valid_metadata_and_records() -> None:
     with zipfile.ZipFile(ROOT / "artifacts" / FILENAME) as wheel:
         metadata = wheel.read("taskiq_redis-1.2.4+aiogramext.2.dist-info/METADATA").decode()
-        assert "Version: 1.2.4+aiogramext.2\n" in metadata
         record_name = "taskiq_redis-1.2.4+aiogramext.2.dist-info/RECORD"
         rows = list(csv.reader(io.StringIO(wheel.read(record_name).decode())))
+
+        assert "Version: 1.2.4+aiogramext.2\n" in metadata
         assert {row[0] for row in rows} == set(wheel.namelist())
+
         for name, digest, size in rows:
             if name == record_name:
                 assert digest == size == ""

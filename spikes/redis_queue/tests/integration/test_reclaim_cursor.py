@@ -30,6 +30,7 @@ async def test_reclaim_scans_past_recently_active_prefix(
         unacknowledged_lock_timeout=1,
     )
     await broker.startup()
+
     reader = broker.listen()
     refresh: asyncio.Task[None] | None = None
     try:
@@ -48,7 +49,9 @@ async def test_reclaim_scans_past_recently_active_prefix(
         refresh = asyncio.create_task(keep_heads_recent())
         async with asyncio.timeout(2):
             message = await anext(reader)
+
         assert message.data == b"tail"
+
         acknowledgement = message.ack()
         if acknowledgement is not None:
             await acknowledgement

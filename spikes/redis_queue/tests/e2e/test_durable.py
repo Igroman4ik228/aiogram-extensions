@@ -183,11 +183,11 @@ async def test_retry_after_deadline_survives_worker_crash(harness: Harness, api:
 
 
 @pytest.mark.parametrize(
-    ("phase", "expected_calls"),
+    ("phase", "expected_calls", "expected_dead_letters"),
     [
-        ("after_success", 1),
-        ("after_response", 2),
-        ("after_dead", 1),
+        ("after_success", 1, 0),
+        ("after_response", 2, 0),
+        ("after_dead", 1, 1),
     ],
 )
 async def test_terminal_crash_windows(
@@ -195,6 +195,7 @@ async def test_terminal_crash_windows(
     api: API,
     phase: str,
     expected_calls: int,
+    expected_dead_letters: int,
 ) -> None:
     if phase == "after_dead":
         api.failures = [400]
@@ -207,6 +208,7 @@ async def test_terminal_crash_windows(
     )
     await harness.stage("one", phase)
     await harness.kill(worker)
+
     harness.env.pop("SPIKE_DURABLE_PAUSE")
     await harness.worker(idle_ms=200)
 
@@ -214,9 +216,9 @@ async def test_terminal_crash_windows(
         return await harness.pending() == 0
 
     await until(acknowledged)
+
     assert len(api.calls) == expected_calls
-    if phase == "after_dead":
-        assert await harness.client.xlen(f"{harness.prefix}:durable-dlq") == 1
+    assert await harness.client.xlen(f"{harness.prefix}:durable-dlq") == expected_dead_letters
 
 
 async def test_renewed_lease_prevents_parallel_http_send(harness: Harness, api: API) -> None:
@@ -237,6 +239,7 @@ async def test_renewed_lease_prevents_parallel_http_send(harness: Harness, api: 
 
     await harness.release("one", "before_request")
     await harness.completed("one")
+
     assert [call["fields"]["text"] for call in api.calls] == ["lease"]
 
 
@@ -265,6 +268,7 @@ async def test_failed_dead_letter_write_does_not_resend_http(harness: Harness, a
         return await harness.pending() == 0
 
     await until(acknowledged)
+
     assert len(api.calls) == 1
     assert await harness.client.xlen(f"{harness.prefix}:durable-dlq") == 1
 

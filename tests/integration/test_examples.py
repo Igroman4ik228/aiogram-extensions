@@ -30,10 +30,21 @@ import pytest
             id="contracts",
         ),
         pytest.param(
+            "pagination_core.py",
+            ("Offset page: 2/2, items: Cherry", "Cursor page: Cherry", "Preview: A long ..."),
+            id="pagination-core",
+        ),
+        pytest.param(
+            "pagination_bot.py",
+            ("Page 1/3", "Catalog", "Apple", "Banana", "Page 2/3", "Catalog", "Cherry", "Date"),
+            id="pagination-navigation",
+        ),
+        pytest.param(
             "redis_lifecycle.py",
             (
                 "Owned client: True",
                 "Key: example:rate_limit:incoming:123:456",
+                "Redis injected: True",
                 "Manager closed: True",
             ),
             id="redis-lifecycle",
