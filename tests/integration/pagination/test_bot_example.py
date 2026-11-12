@@ -11,6 +11,15 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
 from aiogram.types import CallbackQuery, Chat, InlineKeyboardMarkup, Message, Update, User
 
+from aiogram_extensions.rate_limit import (
+    MemoryRateLimitBackend,
+    RateLimitConfig,
+    RateLimiter,
+    RateLimitExceededError,
+    RateRule,
+)
+from aiogram_extensions.rate_limit.middleware import OutgoingRateLimitMiddleware
+
 
 async def test_catalog_command_and_buttons_edit_the_message(project_root: Path) -> None:
     example = runpy.run_path(str(project_root / "examples" / "pagination_bot.py"))
@@ -128,4 +137,57 @@ async def test_catalog_button_can_be_retried_after_a_rejected_edit(project_root:
 
     edit = transport.call_args.args[1]
     assert isinstance(edit, EditMessageText)
+    assert edit.text == "Catalog\nCherry\nDate"
+
+
+async def test_catalog_next_button_works_when_send_message_quota_is_exhausted(
+    project_root: Path,
+) -> None:
+    example = runpy.run_path(str(project_root / "examples" / "pagination_bot.py"))
+    dispatcher = Dispatcher()
+    dispatcher.include_router(example["build_router"]())
+    limiter = RateLimiter(
+        RateLimitConfig(rules=(RateRule(name="method", scope="method", limit=1, window=60),)),
+        direction="outgoing",
+        backend=MemoryRateLimitBackend(clock=lambda: 0.0),
+    )
+
+    chat = Chat(id=10, type="private")
+    user = User(id=30, is_bot=False, first_name="Reader")
+    now = datetime.now(UTC)
+    command = Message(message_id=1, date=now, chat=chat, from_user=user, text="/catalog")
+    sent = Message(message_id=20, date=now, chat=chat)
+    transport = AsyncMock(side_effect=[sent, True, True])
+
+    async with Bot("123456:synthetic") as bot:
+        bot.session.make_request = transport
+        bot.session.middleware(OutgoingRateLimitMiddleware(limiter))
+
+        await dispatcher.feed_update(bot, Update(update_id=1, message=command))
+        initial = transport.call_args.args[1]
+        assert isinstance(initial, SendMessage)
+        assert isinstance(initial.reply_markup, InlineKeyboardMarkup)
+
+        with pytest.raises(RateLimitExceededError) as denied:
+            await bot.send_message(chat.id, "Another message")
+
+        assert denied.value.result.triggered_rules == ("method",)
+        assert transport.await_count == 1
+
+        query = CallbackQuery(
+            id="next",
+            from_user=user,
+            chat_instance="chat",
+            message=sent,
+            data=initial.reply_markup.inline_keyboard[0][-1].callback_data,
+        )
+        await dispatcher.feed_update(bot, Update(update_id=2, callback_query=query))
+
+    assert transport.await_count == 3
+    answer = transport.await_args_list[1].args[1]
+    assert isinstance(answer, AnswerCallbackQuery)
+    assert answer.callback_query_id == query.id
+    edit = transport.await_args_list[2].args[1]
+    assert isinstance(edit, EditMessageText)
+    assert edit.message_id == sent.message_id
     assert edit.text == "Catalog\nCherry\nDate"

@@ -45,7 +45,7 @@ async def main(*, live: bool) -> None:
     if live:
         token = os.environ.get("BOT_TOKEN")
         if not token:
-            raise SystemExit("Set BOT_TOKEN before running with --live.")  # noqa: TRY003
+            raise SystemExit("Set BOT_TOKEN before running with --live.")
 
         dispatcher = Dispatcher()
         dispatcher.include_router(build_router())

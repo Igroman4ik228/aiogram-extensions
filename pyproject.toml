@@ -39,7 +39,12 @@ build-backend = "uv_build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-config", "--strict-markers", "--import-mode=importlib"]
+addopts = [
+    "-ra",
+    "--strict-config",
+    "--strict-markers",
+    "--import-mode=importlib",
+]
 xfail_strict = true
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -59,6 +64,7 @@ ignore = [
     # Project preferences
     "D1",     # Do not require docstrings for every public definition.
     "EM",     # Avoid extra variables solely for exception messages.
+    "TRY003", # Keep contextual exception messages at the raise site.
     "FIX",    # Allow TODO and FIXME comments without requiring immediate fixes.
     "TD",     # Do not enforce strict TODO formatting or issue references.
     "CPY",    # Do not require copyright headers in every source file.
@@ -83,6 +89,9 @@ ignore = [
     "D213",
 ]
 
+[tool.ruff.lint.flake8-bugbear]
+# Taskiq uses this default as a dependency injection marker.
+extend-immutable-calls = ["taskiq.TaskiqDepends"]
 
 [tool.ruff.lint.pylint]
 max-args = 10

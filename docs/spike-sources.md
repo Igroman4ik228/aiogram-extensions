@@ -22,6 +22,26 @@ the project matrix. [1.2.4 notes](https://github.com/taskiq-python/taskiq-redis/
 
 ## Transport and recovery
 
+### Reference implementation: django-aiogram
+
+[django-aiogram](https://github.com/CorneiZeR/django-aiogram) is a reference for
+Redis Streams recovery, acknowledgement timing and operator replay. Review these
+paths when changing the corresponding behavior here.
+
+- Study how consumers reclaim pending messages after a worker dies, including
+  when no new messages arrive. Preserve pending entries when designing retention.
+  [Redis Streams](https://corneizer.github.io/django-aiogram/latest/Redis-Streams/)
+- Verify that scheduling an async send leaves the delivery pending. Versions
+  before 3.1.0 acknowledged when the handler returned, which could lose an
+  in-flight send on shutdown. Persist the terminal outcome before acknowledging.
+  [Delivery history](https://github.com/CorneiZeR/django-aiogram/blob/97bbedbb722437ec4e497d1797c89b102d4fe7cd/docs/wiki/Delivery.md#L289)
+- Use the replay claim as a reference for concurrent operator requests. Also test
+  the crash window where publication succeeded and its reply was lost. Taking
+  over an expired claim in that window can publish a duplicate.
+  [Replay implementation](https://github.com/CorneiZeR/django-aiogram/blob/97bbedbb722437ec4e497d1797c89b102d4fe7cd/src/django_aiogram/management/commands/tgbot_replay.py#L177-L202)
+
+### Taskiq Redis candidate
+
 The tagged `RedisStreamBroker` source shows:
 
 - Enqueue uses `XADD`; acknowledgement uses `XACK` and does not delete the stream

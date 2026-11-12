@@ -46,7 +46,7 @@ class RedisRateLimitBackend:
         try:
             client = self._manager.client
         except RedisLifecycleError:
-            raise RateLimitBackendError("Redis rate limit manager is unavailable") from None  # noqa: TRY003
+            raise RateLimitBackendError("Redis rate limit manager is unavailable") from None
 
         from redis.exceptions import RedisError  # noqa: PLC0415 -- Optional dependency.
 
@@ -54,7 +54,7 @@ class RedisRateLimitBackend:
             # redis-py overloads EVAL for synchronous and asynchronous clients.
             return await client.eval(script, len(keys), *keys, *args)
         except RedisError:
-            raise RateLimitBackendError("Redis rate limit operation failed") from None  # noqa: TRY003
+            raise RateLimitBackendError("Redis rate limit operation failed") from None
 
     async def check(self, buckets: Buckets, cooldown_key: Key | None) -> BackendDecision:
         keys = [self._manager.key("rate_limit", *cooldown_key)] if cooldown_key else []
@@ -69,7 +69,7 @@ class RedisRateLimitBackend:
 
         delays = await self._eval(_script("_check.lua"), keys, *args)
         if not _valid_delays(delays, len(buckets) + 1):
-            raise RateLimitBackendError("Redis returned an invalid rate limit reply")  # noqa: TRY003
+            raise RateLimitBackendError("Redis returned an invalid rate limit reply")
 
         blocked = tuple(
             (rule.name, delay / 1000)

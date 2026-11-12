@@ -138,7 +138,7 @@ async def dispatch_loop(journal: DeliveryJournal) -> None:
 async def durable_deliver(
     job: str,
     generation: str,
-    context: Context = TaskiqDepends(),  # noqa: B008 -- Taskiq resolves this dependency marker.
+    context: Context = TaskiqDepends(),
 ) -> None:
     journal: DeliveryJournal = context.state.journal
     bot: Bot = context.state.bot

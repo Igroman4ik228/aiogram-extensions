@@ -45,6 +45,20 @@ import pytest
             id="rate-limit",
         ),
         pytest.param(
+            "memory_queue_bot.py",
+            (
+                "Sent to 123: Catalog",
+                "Apple",
+                "Banana",
+                "Callback answered",
+                "Edited 20: Catalog",
+                "Cherry",
+                "Date",
+                "Sent to 123: Hello from Memory Queue!",
+            ),
+            id="memory-queue-bot",
+        ),
+        pytest.param(
             "redis_lifecycle.py",
             (
                 "Owned client: True",

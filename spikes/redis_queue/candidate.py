@@ -12,7 +12,7 @@ REMOVED = "                if not fetched:\n                    continue\n"
 
 def patched_source(original: bytes) -> bytes:
     if hashlib.sha256(original).hexdigest() != SOURCE_SHA256:
-        raise ValueError("Unexpected taskiq-redis source")  # noqa: TRY003 -- Artifact guard.
+        raise ValueError("Unexpected taskiq-redis source")
 
     text = original.decode()
     updated = text.replace(REMOVED, "", 1)
@@ -47,7 +47,7 @@ def patched_source(original: bytes) -> bytes:
     )
 
     if patch != Path(__file__).with_name("recovery.patch").read_text(encoding="utf-8"):
-        raise ValueError("Recovery patch mismatch")  # noqa: TRY003 -- Reviewed patch must match.
+        raise ValueError("Recovery patch mismatch")
 
     return updated.encode()
 

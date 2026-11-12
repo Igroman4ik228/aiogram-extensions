@@ -5,7 +5,7 @@
 Modular extensions and utilities for aiogram 3.
 
 **Under development.** Rate limiting, pagination, typed callbacks and Redis
-connection management are available. Message queues are planned.
+connection management and the Memory message queue are available. Redis delivery is planned.
 
 ## Getting started
 
@@ -37,6 +37,7 @@ uv run --locked examples/redis_lifecycle.py
 uv run --locked examples/pagination_core.py
 uv run --locked examples/pagination_bot.py
 uv run --locked examples/rate_limit.py
+uv run --locked examples/memory_queue_bot.py
 ```
 
 - [Package information](../examples/package_info.py): import the package and inspect
@@ -321,6 +322,94 @@ account used by the tests needs permission to create and remove a temporary ACL
 user. The Redis server cases skip when the variable is absent. Middleware tests
 use a Telegram stub.
 
+### Memory Queue
+
+Use `async with MessageQueue(bot=bot)` to start workers and drain them on exit.
+Use `await queue.start()` and `await queue.stop()` to manage the lifecycle manually.
+Workers share one Bot per run. The application owns a Bot passed as `bot=`. Pass a
+synchronous `bot_factory=` to create a Bot per run and let the queue close its session.
+Use one event loop per queue instance. Once stop has finished, start the same
+instance again to retain idempotency records and replay unexpired DLQ entries.
+
+```python
+from aiogram_extensions.messaging import MessageQueue, QueueConfig
+
+async with MessageQueue(bot=bot, config=QueueConfig(workers=2, maxsize=100)) as queue:
+    receipt = await queue.send_message(chat_id=123, text="Hello!", idempotency_key="welcome-123")
+```
+
+The receipt confirms admission. Use `EventDispatcher` for delivery observations. The
+convenience methods raise `SerializationError` for invalid aiogram method parameters. They accept
+the corresponding aiogram method options and keyword-only `idempotency_key`. Pass a supported aiogram method object to `queue.send`.
+Each attempt goes through the Bot session, including outgoing rate limiting.
+A local rejection and `TelegramRetryAfter` both supply a minimum delay when a retry
+is scheduled. A synchronous `retry_policy(error, attempt)` returns a finite,
+non-negative delay or `None` to end delivery. The attempt limit applies to every policy.
+Retries occupy the worker and capacity slot during backoff.
+
+Memory snapshots method parameters. It accepts file IDs, URL strings,
+`FSInputFile`, `BufferedInputFile` and `URLInputFile` without an attached Bot, including
+uploads within an album. The local payload budget covers encoded metadata and
+buffered bytes. Workers open paths and URLs at send time, so their contents must
+remain available for retries and replay. File fingerprints use source metadata or
+the buffered bytes.
+
+Use `queue.dead_letters()` to inspect retained failed generations and
+`await queue.replay(entry.task_id, entry.generation)` to enqueue one again. Replay
+keeps the task ID, assigns a new generation and resets attempts. Replay receipts
+expire `terminal_ttl` seconds after replay. Replay preserves a key while it still
+belongs to the failed generation. Call `queue.cleanup()` to reclaim expired records
+while idle. Admission, completion and DLQ inspection also reclaim expired records.
+DLQ entries can contain message data and should be accessed only by trusted code.
+
+Stop closes admission immediately and waits for delivery. Cancelling the caller of
+`stop()` leaves drain running while the event loop is open, and a later call can
+await the same result. The drain deadline triggers cancellation, worker cleanup and closing any owned
+session. The queue then gives DLQ notifications a separate `drain_timeout` window
+before raising `DrainTimeoutError`. Session and callback code should cooperate with
+cancellation. If a worker exits with an unexpected exception, `stop()` puts
+unfinished jobs in the DLQ with reason `worker_failed`, closes any owned session
+and raises `QueueError`. A secondary session close failure adds a note to the
+drain error, and the queue still attempts the DLQ notifications. If the event loop
+cancels the drain itself, it cancels the workers, records unfinished jobs as
+`cancelled` and closes the owned session. That path skips terminal callbacks.
+
+For dependency injection in aiogram handlers, use the dispatcher adapter. A queue
+supports one active context. Entering a second context raises `QueueError`.
+
+```python
+from aiogram.types import Message
+from aiogram_extensions.messaging import MessageQueue
+from aiogram_extensions.messaging.aiogram import message_queue_context
+
+
+@dispatcher.message()
+async def reply(message: Message, message_queue: MessageQueue) -> None:
+    await message_queue.send(message.reply("Hello!"))
+
+
+queue = MessageQueue(bot=bot)
+async with message_queue_context(dispatcher, queue):
+    await dispatcher.start_polling(bot, close_bot_session=False, handle_as_tasks=False)
+```
+
+The context starts and drains the queue, and removes its dispatcher binding on exit.
+The `key` option changes the handler parameter name. An occupied key raises
+`ValueError` before workers start. Keep the Bot session open until the context exits.
+
+The [combined bot](../examples/memory_queue_bot.py) opens a catalog with `/catalog`
+and queues a reply with `/hello`. The catalog sends its first page directly to get
+the message ID for navigation. Button acknowledgements and page edits also go
+directly through the Bot session. The incoming limiter applies to messages.
+Outgoing budgets are per API method, so sending messages leaves capacity for
+acknowledging buttons and editing pages. A Telegram flood wait still applies
+to the whole bot. The quotas in the example are illustrative.
+
+Run `uv run --locked examples/memory_queue_bot.py` to open the catalog, turn a
+page and send the queued reply offline. Set `BOT_TOKEN` and add `--live` to poll
+Telegram. See the [aiogram 3.31.0 documentation](https://docs.aiogram.dev/en/v3.31.0/)
+for the version pinned in the project lockfile.
+
 ### Queue decisions
 
 `TaskState`: enqueued → started → completed; transient failure uses
@@ -359,8 +448,8 @@ Within a backend/namespace, equal idempotency keys/payloads return the retained
 task/generation with `duplicate=True`; different payloads raise
 `IdempotencyConflictError`. Active identities never expire. After a terminal outcome,
 `idempotency_ttl` retains identity/fingerprint, independently of `terminal_ttl` for
-outcome/DLQ bodies. Expired bodies are inaccessible and removed by bounded worker
-cleanup or explicit cleanup. Replay checks capacity and atomically replaces the
+outcome/DLQ bodies. Expired Memory records are inaccessible and reclaimed during
+queue operations or explicit cleanup. Replay checks capacity and atomically replaces the
 DLQ entry with one new generation; repeating a retained replay returns it. Memory
 loses all state at process exit. Redis follows the [spike protocol](redis-queue-spike.md).
 
@@ -406,7 +495,7 @@ exit, including after an error. Use `key="cache"` and a handler parameter named
 `cache` for a different name. The key must be free in dispatcher data. Pass
 `client=...` to borrow an existing connection. Use `as manager` to build namespaced
 keys via `manager.key(...)`. The [offline example](../examples/redis_lifecycle.py)
-demonstrates injection with a local update. [Aiogram DI documentation](https://docs.aiogram.dev/en/3.31.0/dispatcher/dependency_injection.html)
+demonstrates injection with a local update. [Aiogram DI documentation](https://docs.aiogram.dev/en/v3.31.0/dispatcher/dependency_injection.html)
 
 `RedisConnectionManager(config=None, *, client=None)` borrows a client or creates
 one lazily. Use `async with manager`, or `await manager.start()` and
@@ -439,11 +528,17 @@ awaits them in registration order. Ordinary exceptions produce a constant warnin
 in `aiogram_extensions.integrations.events`; remaining callbacks still run.
 Exception text/tracebacks, IDs, credentials and payloads are not logged; root logging
 is unchanged. Cancellation/other `BaseException` subclasses propagate. Slow callbacks
-delay callers; applications can implement callback timeouts. Future components emit
+delay callers; applications can implement callback timeouts. Components emit
 after committing transitions; callback errors cannot roll them back. Cancellation
-after commit may hide a result, so retry with idempotency. Events are local observations,
-not a durable audit log. Currently applications emit explicitly; automatic component
-events arrive with their implementations.
+after commit may hide a result, so retry with idempotency. Pass
+`events=EventDispatcher((on_event,))` to `MessageQueue` to observe its transitions.
+Callbacks for admission and delivery can interleave when a callback suspends.
+If a worker callback submits to its own full queue, it receives `QueueFullError`
+immediately, including with `overflow="wait"`. A callback that calls `stop()` on
+its own queue receives `QueueError`. These checks apply to child tasks while the
+queue callback runs or the aiogram delivery attempt is in progress, including
+outgoing middleware. A detached task can wait for capacity once that call returns.
+Use task ID and generation to correlate events. Events are local observations.
 
 ## Development
 

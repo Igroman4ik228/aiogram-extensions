@@ -27,3 +27,7 @@ class SerializationError(QueueError):
 
 class IdempotencyConflictError(QueueError):
     """A retained idempotency key identifies a different payload."""
+
+
+class DeadLetterNotFoundError(QueueError):
+    """The requested failed generation is absent or its retention expired."""
